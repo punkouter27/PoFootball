@@ -120,15 +120,21 @@ submitting — these are the answers the project supports, not a signature.
 |---|---|
 | Does your app collect or share any of the required user data types? | No data collected |
 | Data shared with third parties | No data shared with third parties |
-| Is data encrypted in transit? | Not applicable — nothing is transmitted |
+| Is data encrypted in transit? | Yes — the one request (live weather) is HTTPS |
 | Can users request data deletion? | Not applicable — nothing is stored off-device |
 
-> **Check this before you submit.** Unity bundles for these projects request
-> `android.permission.INTERNET`, pulled in by the ML-Agents runtime rather than
-> by anything the game does. The app makes no network calls at run time, so
-> *no data collected* is the truthful answer — but Play does cross-check declared
-> permissions against data-safety answers, so confirm the permission is either
-> stripped from the release build or that you are comfortable explaining it.
+> **Check this before you submit — it changed on 2026-10-22.** The app now makes
+> ONE network call: with Settings > Broadcast > Live weather on (the default), it
+> asks `https://api.open-meteo.com` for the current weather at one of twelve FIXED
+> stadium cities when a game starts. The request carries only that city's
+> coordinates — never the device's location — so no Play data type is collected
+> from the user, and *no data collected* remains the answer the code supports. Open-Meteo
+> does see the device's IP address, as any web server would; Play's guidance treats
+> an IP that is not used to derive location as outside the data types, but read the
+> current wording yourself. `privacy-policy.html` (updated 22 October 2026)
+> describes the request, and also the `VIBRATE` permission the haptics add. If you
+> would rather keep the old "makes no network calls" answer, flip
+> `Systems_BroadcastSettings` LIVE_WEATHER back to a default of 0.
 
 ## 9. Internal testing track
 

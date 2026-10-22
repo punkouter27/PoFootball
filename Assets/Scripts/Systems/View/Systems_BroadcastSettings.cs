@@ -85,11 +85,11 @@ namespace PoFootball.Views
         /// Whether the weather is fetched for a real stadium city at kickoff. Off,
         /// the sky is drawn from the game seed and nothing leaves the device.
         ///
-        /// OFF BY DEFAULT, AND THAT IS A PROMISE, NOT A PREFERENCE. The published
-        /// privacy policy (privacy-policy.html) says the app makes no network
-        /// requests, and the Play data-safety form was filled in on that basis.
-        /// Until both say otherwise, the request is only ever made for a viewer
-        /// who switched it on.
+        /// ON BY DEFAULT SINCE privacy-policy.html (22 October 2026) DESCRIBES IT:
+        /// one request per game to open-meteo.com, carrying a fixed city's
+        /// coordinates. It was off while the policy still said the app made no
+        /// network requests. The Play data-safety form has to say the same before a
+        /// build with this default ships.
         /// </summary>
         public static bool LiveWeather
         {
@@ -137,7 +137,7 @@ namespace PoFootball.Views
             _callSheet = PlayerPrefs.GetInt(CALL_SHEET_KEY, 1) != 0;
             _commentary = PlayerPrefs.GetInt(COMMENTARY_KEY, 1) != 0;
             _speech = PlayerPrefs.GetInt(SPEECH_KEY, 0) != 0;
-            _liveWeather = PlayerPrefs.GetInt(LIVE_WEATHER_KEY, 0) != 0;
+            _liveWeather = PlayerPrefs.GetInt(LIVE_WEATHER_KEY, 1) != 0;
             _haptics = PlayerPrefs.GetInt(HAPTICS_KEY, 1) != 0;
             _autoDirector = PlayerPrefs.GetInt(AUTO_DIRECTOR_KEY, 1) != 0;
             _fatigueRings = PlayerPrefs.GetInt(FATIGUE_RINGS_KEY, 1) != 0;

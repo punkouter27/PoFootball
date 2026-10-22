@@ -280,9 +280,10 @@ Decisions worth keeping:
   Verified on `Football_v03/DefenseCall.onnx`: graded distributions, masked slot
   never drawn. A trained quarterback's odds are not read (its observation includes
   two ray sensors), so the sheet shows its call alone and says so.
-- **Live weather is OFF by default.** `privacy-policy.html` says the app makes no
-  network requests; turning it on sends one city's coordinates to open-meteo.com.
-  Update the policy and the Play data-safety form before defaulting it on.
+- **Live weather is ON by default since 2026-10-22**, when `privacy-policy.html`
+  was updated to describe it: one HTTPS request per game to open-meteo.com with a
+  fixed city's coordinates. It was off while the policy still said the app made no
+  network requests. `StoreAssets/play-listing.md` §8 has the data-safety note.
 - **Glyphs:** neither Oswald nor Bebas Neue carries U+2192 (→); `·`, `°`, `—`, `×`
   and `…` are present. A missing glyph renders as an empty box.
 - **Speech and haptics are Android-only and use explicit JNI signatures**,

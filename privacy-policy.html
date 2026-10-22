@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PoFootball Privacy Policy · Punkouter Software</title>
-<meta name="description" content="Privacy policy for PoFootball by Punkouter Software. The app collects no data.">
+<meta name="description" content="Privacy policy for PoFootball by Punkouter Software. The app collects no personal data.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
@@ -85,13 +85,14 @@ footer a{color:var(--ink-2)}
   <p class="eyebrow">Punkouter Software · Privacy policy</p>
   <h1>PoFootball</h1>
   <p class="dek">AI football, learned not scripted</p>
-  <p class="meta">Application ID com.punkoutersoftware.pofootball<br>Last updated 17 October 2026</p>
+  <p class="meta">Application ID com.punkoutersoftware.pofootball<br>Last updated 22 October 2026</p>
 </header>
 
 <h3>The short version</h3>
 <p><strong>PoFootball does not collect, store, transmit or share any personal
-information.</strong> It runs entirely on your device. There is no account to create,
-nothing to sign in to, and no server for the app to talk to.</p>
+information.</strong> It runs on your device. There is no account to create and nothing
+to sign in to. The one network request it makes is a weather lookup for a fixed stadium
+city, described below, which you can switch off.</p>
 
 <h3>What the app does not do</h3>
 <ul>
@@ -101,8 +102,25 @@ nothing to sign in to, and no server for the app to talk to.</p>
   <li>It shows no ads and offers no in-app purchases.</li>
   <li>It has no chat, no user accounts, no leaderboards and no way to share anything
       with other players.</li>
-  <li>It sends nothing to Punkouter Software or to any third party.</li>
+  <li>It sends nothing to Punkouter Software, and nothing about you to any third party.</li>
 </ul>
+
+<h3>Live weather</h3>
+<p>Each game is played in one of twelve fixed stadium cities, chosen by the game itself.
+When <strong>Live weather</strong> is on (Settings &gt; Broadcast), the app asks
+<a href="https://open-meteo.com/">Open-Meteo</a> for that city's current weather when a
+game starts, so the rain or snow on screen matches the real sky there. The request
+contains only the city's published latitude and longitude. As with any web request,
+Open-Meteo's servers see your device's IP address; nothing else about you or your device is
+sent, the app keeps nothing from the request but the weather it returns, and no account or
+key is involved. Open-Meteo's own terms and privacy policy apply to that request.</p>
+<p>Switch <strong>Live weather</strong> off and the app makes no network request at all;
+the weather is then made up by the game from its own random seed.</p>
+
+<h3>Commentary voice</h3>
+<p>If you switch on the commentary <strong>Voice</strong>, the play-by-play is read aloud
+by your phone's own text-to-speech engine. The app hands it the commentary text and nothing
+else; what your speech engine does with text is governed by its provider's policy.</p>
 
 <h3>What stays on your device</h3>
 <p>PoFootball may save ordinary game state — progress, settings, results — in the app's own
@@ -111,10 +129,11 @@ uninstalling the app deletes it. There is nothing for us to delete on your behal
 we never receive it in the first place.</p>
 
 <h3>Permissions</h3>
-<p>The app may request the <code>INTERNET</code> permission. That comes from the machine
-learning framework the game is built on, not from anything the game does; PoFootball makes no
-network requests while you play it. If a future version genuinely needs the network for a
-feature, this page will be updated before that version is released.</p>
+<p>The app requests the <code>INTERNET</code> permission, used only for the live weather
+lookup above. It also requests <code>VIBRATE</code>, so the phone can buzz on a big hit
+(Settings &gt; Broadcast &gt; Haptics). It asks for no location, contacts, storage, camera or
+microphone permission. If a future version needs the network for anything else, this page
+will be updated before that version is released.</p>
 
 <h3>Children</h3>
 <p>PoFootball is not directed at children under 13, and because it collects no data it does

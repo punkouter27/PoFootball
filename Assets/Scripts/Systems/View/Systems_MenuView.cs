@@ -350,8 +350,8 @@ namespace PoFootball.Views
                 value => Systems_BroadcastSettings.LiveWeather = value));
 
             Label hint = Systems_UiTheme.Text(
-                "Live weather asks open-meteo.com for one stadium city's conditions at kickoff. "
-                + "Off, the sky is drawn from the game seed.",
+                "Live weather asks open-meteo.com for one stadium city's conditions at kickoff; "
+                + "nothing about you is sent. Off, the sky is drawn from the game seed.",
                 Systems_UiTheme.TEXT_CAPTION - 2,
                 Systems_UiTheme.TextMuted);
             hint.style.whiteSpace = WhiteSpace.Normal;
