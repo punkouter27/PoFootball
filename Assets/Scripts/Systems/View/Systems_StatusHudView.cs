@@ -591,8 +591,9 @@ namespace PoFootball.Views
 
         private void Refresh()
         {
-            float median = Percentile(0.50f);
-            float p99 = Percentile(0.99f);
+            SortSamples();
+            float median = SortedPercentile(0.50f);
+            float p99 = SortedPercentile(0.99f);
 
             // The first two seconds of a scene are dominated by shader compilation
             // and asset loads. Reporting that as the session's worst frame would put
@@ -1426,13 +1427,23 @@ namespace PoFootball.Views
 
         private float Percentile(float fraction)
         {
+            SortSamples();
+            return SortedPercentile(fraction);
+        }
+
+        /// <summary>Copies the window into the scratch buffer, sorted, for <see cref="SortedPercentile"/>.</summary>
+        private void SortSamples()
+        {
+            Array.Copy(_samples, _sortScratch, _sampleCount);
+            Array.Sort(_sortScratch, 0, _sampleCount);
+        }
+
+        private float SortedPercentile(float fraction)
+        {
             if (_sampleCount == 0)
             {
                 return 0f;
             }
-
-            Array.Copy(_samples, _sortScratch, _sampleCount);
-            Array.Sort(_sortScratch, 0, _sampleCount);
 
             int index = Mathf.Clamp(
                 Mathf.RoundToInt(fraction * (_sampleCount - 1)), 0, _sampleCount - 1);

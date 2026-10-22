@@ -219,7 +219,7 @@ namespace PoFootball.Systems
             float closingSpeed)
         {
             if (!_ball.IsInFlight || _ball.PassKind != Systems_PassKind.Forward
-                || !IsEligibleReceiver(receiver.Role)
+                || !receiver.Role.IsEligibleReceiver()
                 || defender.Role == Systems_PlayerRole.DefensiveLine
                 || receiver.Position.y <= _play.LineOfScrimmageY
                 || closingSpeed < Systems_SimConstants.PASS_INTERFERENCE_MIN_SPEED
@@ -406,7 +406,7 @@ namespace PoFootball.Systems
                 + (Systems_SimConstants.DEFENSIVE_HOLDING_DEPTH_YARDS * Systems_FieldModel.YARD);
 
             if (beforeTheThrow
-                && IsEligibleReceiver(offense.Role)
+                && offense.Role.IsEligibleReceiver()
                 && defense.Role != Systems_PlayerRole.DefensiveLine
                 && offense.Position.y > holdingDepth
                 && ticks >= Systems_SimConstants.DEFENSIVE_HOLDING_MIN_TICKS)
@@ -453,14 +453,6 @@ namespace PoFootball.Systems
             }
 
             _play.RecordFoul(new Systems_Foul(type, side, playerId, spotY, _play.PhysicsTick));
-        }
-
-        private static bool IsEligibleReceiver(Systems_PlayerRole role)
-        {
-            return role == Systems_PlayerRole.WideReceiver
-                || role == Systems_PlayerRole.TightEnd
-                || role == Systems_PlayerRole.RunningBack
-                || role == Systems_PlayerRole.Fullback;
         }
 
         private static bool IsBlocker(Systems_PlayerRole role)

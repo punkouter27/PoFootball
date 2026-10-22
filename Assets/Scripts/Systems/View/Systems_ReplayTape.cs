@@ -174,16 +174,6 @@ namespace PoFootball.Views
         }
 
         /// <summary>
-        /// The ball's plane position on one recorded tick, for framing a highlight.
-        /// No interpolation: the caller is walking every tick anyway.
-        /// </summary>
-        public Vector2 BallAt(int frame)
-        {
-            int slot = Physical(Mathf.Clamp(frame, 0, Mathf.Max(0, _count - 1)));
-            return new Vector2(_ballX[slot], _ballY[slot]);
-        }
-
-        /// <summary>
         /// Replaces this tape's contents with the newest <paramref name="frames"/>
         /// ticks of <paramref name="source"/>, laid out from slot 0. Array.Copy per
         /// tick, so nothing is allocated — this runs inside a message handler that

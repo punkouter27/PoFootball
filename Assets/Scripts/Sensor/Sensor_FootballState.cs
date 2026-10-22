@@ -1,5 +1,4 @@
 using PoFootball.Models;
-using Unity.MLAgents.Sensors;
 using UnityEngine;
 
 namespace PoFootball.Sensors
@@ -191,7 +190,7 @@ namespace PoFootball.Sensors
             // did not move — which means nothing but CONTRACT_REVISION refuses a
             // revision 11 brain here.
             buffer[cursor++] =
-                Mathf.Clamp(field.YardsToAttackingGoal(position.y) / 100f, -1f, 1f);
+                Mathf.Clamp(Systems_FieldModel.YardsToAttackingGoal(position.y) / 100f, -1f, 1f);
             buffer[cursor++] = NormalizeRange(lineOfScrimmageY - position.y);
 
             // Own spin, against this role's top turn rate: 1.
@@ -266,41 +265,6 @@ namespace PoFootball.Sensors
             buffer[cursor++] = Mathf.Clamp(traits.Strength, -1f, 1f);
             buffer[cursor++] = Mathf.Clamp(traits.Agility, -1f, 1f);
             buffer[cursor++] = Mathf.Clamp(traits.Discipline, -1f, 1f);
-        }
-
-        /// <summary>Fills the buffer and pushes it into the sensor in one call.</summary>
-        public static void Collect(
-            VectorSensor sensor,
-            float[] buffer,
-            Systems_FieldModel field,
-            Systems_PlayerRole role,
-            Systems_PlayerTraits traits,
-            Vector2 position,
-            Vector2 velocity,
-            float rotationDegrees,
-            float angularVelocityDegrees,
-            float fatigue,
-            bool isCarrier,
-            Vector2 ballPosition,
-            Vector2 ballVelocity,
-            Systems_BallState ballState,
-            Systems_PlayCall call,
-            float lineOfScrimmageY,
-            int down,
-            float yardsToGo,
-            int physicsTick,
-            float ballHeight,
-            float possession,
-            Systems_PlayKind kind,
-            bool isPreSnap)
-        {
-            Write(
-                buffer, field, role, traits, position, velocity, rotationDegrees,
-                angularVelocityDegrees, fatigue,
-                isCarrier, ballPosition, ballVelocity, ballState, call, lineOfScrimmageY,
-                down, yardsToGo, physicsTick, ballHeight, possession, kind, isPreSnap);
-
-            sensor.AddObservation(buffer);
         }
 
         private static float NormalizeRange(float metres)

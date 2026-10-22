@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broadcast Graphics Report</title>
+<style>
+  :root { --bg: #0b0f0d; --surface: #161b18; --text: #f2f7f3; --muted: #9aa89f; --accent: #fbc938; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; color: var(--accent); }
+  p, li { color: var(--muted); }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  figure { margin: 0; background: var(--surface); border-radius: 12px; padding: 12px; }
+  figure img { width: 100%; border-radius: 8px; display: block; }
+  figcaption { margin-top: 8px; color: var(--text); font-size: 14px; }
+  figcaption ul { margin: 6px 0 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Broadcast graphics: before and after</h1>
+  <p>SCN_GAME, 1080×1920 Game view, scripted players, 2026-10-22. "Before" is the same build with every
+  SETTINGS &gt; BROADCAST switch off, which is the game as it was. EditMode 363/363 and PlayMode 26/26 pass.</p>
+
+  <h2>Overview</h2>
+  <div class="pair">
+    <figure><img src="broadcast_before.png" alt="Game with broadcast graphics off">
+      <figcaption>Before: scoreboard, result banner and transport only.</figcaption></figure>
+    <figure><img src="broadcast_after_6.png" alt="Game with broadcast graphics on">
+      <figcaption>After:
+        <ul>
+          <li>Win-probability ribbon under the scoreboard (HOM 62% / 38% AWY) with the game line.</li>
+          <li>Call sheet: 4-3 UNDER at 12% (scripted, drawn evenly), RUN 100%, then CALLED HB RUN 50%.</li>
+          <li>Space-control tint on the turf; pursuit lines to intercept points.</li>
+          <li>Play-by-play: "3rd &amp; 14 at the HOME 31. The quarterback finds the tight end for 52 yards…"</li>
+        </ul></figcaption></figure>
+  </div>
+
+  <h2>Hits and the banner band</h2>
+  <div class="pair">
+    <figure><img src="broadcast_after_9.png" alt="Big hit chip">
+      <figcaption>BIG HIT 15 MPH, ~3.1 kN on a tackle for a loss. The result banner now sits below the ribbon
+      (Systems_HudView BANNER_CLEARANCE 164 → 200).</figcaption></figure>
+    <figure><img src="broadcast_after_3.png" alt="First pass, before layout fixes">
+      <figcaption>First capture, before tuning: the ribbon was hidden behind the scoreboard (guessed height 120; it is 146)
+      and the space-control tint at alpha 0.34 washed the field teal and amber. Both fixed (0.17).</figcaption></figure>
+  </div>
+
+  <h2>Weather (forced for the capture)</h2>
+  <div class="pair">
+    <figure><img src="broadcast_after_12.png" alt="Night snow">
+      <figcaption>Snow at night: round flakes (the first pass drew squares), darker and cooler stadium lights, and the
+      caption "KANSAS CITY · -3°C · SNOW · WIND 24 NW" under the ribbon. The auto-director has gone wide for a kick.</figcaption></figure>
+    <figure><img src="broadcast_after_13.png" alt="Rain">
+      <figcaption>Rain: faint streaks. The ribbon swung to AWY 68% after the touchdown; the ticker reads "AWAY kicks off. Touchback."</figcaption></figure>
+  </div>
+
+  <h2>Not shown</h2>
+  <p>Speech and haptics are Android-only and untested on a handset. The frame cost of the new views has not been
+  profiled; the Game view held 60 FPS in every capture.</p>
+</main>
+</body>
+</html>

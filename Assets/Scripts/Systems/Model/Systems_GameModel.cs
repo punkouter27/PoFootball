@@ -66,7 +66,7 @@ namespace PoFootball.Models
 
         /// <summary>Yards from the line of scrimmage to the goal line being attacked.</summary>
         public float YardsToGoal =>
-            (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - LineOfScrimmageY) / Systems_FieldModel.YARD;
+            Systems_FieldModel.YardsToAttackingGoal(LineOfScrimmageY);
 
         /// <summary>True when the goal line is nearer than the chains — "1st and Goal".</summary>
         public bool IsGoalToGo => YardsToGoal <= YardsToGo;

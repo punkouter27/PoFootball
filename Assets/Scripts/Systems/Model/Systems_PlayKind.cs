@@ -74,6 +74,16 @@ namespace PoFootball.Models
             return kind == Systems_PlayKind.FieldGoal || kind == Systems_PlayKind.ExtraPoint;
         }
 
+        /// <summary>
+        /// The downs on which the quarterback's play call is live: an ordinary down
+        /// and the two-point try. Every other kind either has its call set by the
+        /// situation (Systems_PlayModel.LatchCall) or has none.
+        /// </summary>
+        public static bool HasLiveCall(this Systems_PlayKind kind)
+        {
+            return kind == Systems_PlayKind.Scrimmage || kind == Systems_PlayKind.TwoPoint;
+        }
+
         /// <summary>The untimed downs after a touchdown.</summary>
         public static bool IsTry(this Systems_PlayKind kind)
         {

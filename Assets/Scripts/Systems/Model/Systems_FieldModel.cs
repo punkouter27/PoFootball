@@ -67,7 +67,24 @@ namespace PoFootball.Models
         public const float LOS_MIN_Y = OWN_GOAL_LINE_Y + (10f * YARD);
         public const float LOS_MAX_Y = ATTACKING_GOAL_LINE_Y - (5f * YARD);
 
-        public bool IsOutsideSidelines(float x)
+        /// <summary>
+        /// The goal line this side attacks: +Y for the offense of the snap, -Y for the
+        /// defense, which only ever carries the ball on a return.
+        /// </summary>
+        public static float GoalLineYOf(Systems_TeamSide side)
+        {
+            return side == Systems_TeamSide.Offense
+                ? ATTACKING_GOAL_LINE_Y
+                : OWN_GOAL_LINE_Y;
+        }
+
+        /// <summary>Own N-yard line expressed in the attacking frame.</summary>
+        public static float OwnYardLineToY(float yardLine)
+        {
+            return OWN_GOAL_LINE_Y + (yardLine * YARD);
+        }
+
+        public static bool IsOutsideSidelines(float x)
         {
             return x < -HALF_WIDTH || x > HALF_WIDTH;
         }
@@ -86,7 +103,7 @@ namespace PoFootball.Models
             return y <= OWN_BACK_LINE_Y;
         }
 
-        public float YardsToAttackingGoal(float y)
+        public static float YardsToAttackingGoal(float y)
         {
             return (ATTACKING_GOAL_LINE_Y - y) / YARD;
         }
@@ -108,7 +125,7 @@ namespace PoFootball.Models
         }
 
         /// <summary>Clamps a spot to the playable area so a dead-ball spot is always legal.</summary>
-        public Vector2 ClampToField(Vector2 position)
+        public static Vector2 ClampToField(Vector2 position)
         {
             return new Vector2(
                 Mathf.Clamp(position.x, -HALF_WIDTH, HALF_WIDTH),

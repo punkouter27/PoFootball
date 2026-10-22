@@ -245,3 +245,55 @@ stack, the diagnostic overlay and 3D audio: **16.5–16.8 ms/frame**, i.e. the 6
 cap of CLAUDE.md §3 with headroom. Training is unaffected — none of it is
 constructed when `Systems_PresentationBudget.EffectsEnabled` is false, and
 `SCN_TRAIN_FOOTBALL` has no UI document at all.
+
+---
+
+## Broadcast graphics (2026-10-22)
+
+Seven presentation features, every one switchable in the menu's **SETTINGS >
+BROADCAST** tab (`Systems_BroadcastSettings`, PlayerPrefs) and every one gated on
+`Systems_PresentationBudget` like everything above. None of them changes a tick of
+the simulation, so none of them is a contract revision.
+
+| Feature | Where | Reads |
+|---|---|---|
+| Win probability ribbon, weather caption | `Systems_BroadcastGraphicsView` → `Systems_WinProbabilityRibbon` | `Systems_WinProbabilityModel` (written by `Systems_WinProbabilitySystem`), `Systems_WeatherModel` |
+| Call sheet | → `Systems_CallSheetCard` | `Systems_ICallSheetSource` (agents report through `Systems_ICallSheetSink`) |
+| Hit meter + haptics | → `Systems_HitMeter`, `Systems_Haptics` | `Systems_TackleMessage`, `Systems_RoleTable.MassOf` × traits |
+| Play-by-play + voice | → `Systems_CommentaryTicker`, `Systems_CommentaryWriter`, `Systems_SpeechOutput` | the play's messages, gathered into `Systems_PlayFacts` |
+| Space control, separation, pursuit | `Systems_SpaceControlView` (Burst job, one texture), `Systems_SeparationView` | registry, roster traits |
+| Fatigue rings | `Systems_FatigueRingView` | `Systems_IPlayerHandle.Fatigue` |
+| Weather (visual only) | `Systems_WeatherView`, `Systems_WeatherSystem`, a hook in `Systems_StadiumRigView` | Open-Meteo when LIVE WEATHER is on, else the seed |
+| Auto-director | inside `Systems_BroadcastCameraView` → `Systems_ShotDirector` | ball, carrier, rushers |
+
+Decisions worth keeping:
+
+- **Win probability is Stern's normal model** (`Systems_WinProbability`): margin
+  plus the possession's expected points over 13.9·√(fraction of regulation left).
+  The expected-points curve is the one the officials already used to accept or
+  decline a flag, moved to `Systems_ExpectedPoints` so the two cannot drift.
+- **The call sheet says where its numbers came from.** SCRIPTED odds are exact —
+  `Agent_PlayCaller.Chances` is tested against `Choose` over 20,000 draws — and the
+  scripted defense's front is an even draw over eight. A trained DefenseCall brain
+  is SAMPLED: ML-Agents' exported graph only outputs the drawn index, so
+  `Agent_PolicySampler` runs the `.onnx` on 64 copies of the observation and counts.
+  Verified on `Football_v03/DefenseCall.onnx`: graded distributions, masked slot
+  never drawn. A trained quarterback's odds are not read (its observation includes
+  two ray sensors), so the sheet shows its call alone and says so.
+- **Live weather is OFF by default.** `privacy-policy.html` says the app makes no
+  network requests; turning it on sends one city's coordinates to open-meteo.com.
+  Update the policy and the Play data-safety form before defaulting it on.
+- **Glyphs:** neither Oswald nor Bebas Neue carries U+2192 (→); `·`, `°`, `—`, `×`
+  and `…` are present. A missing glyph renders as an empty box.
+- **Speech and haptics are Android-only and use explicit JNI signatures**,
+  because `AndroidJavaObject.Call` builds a signature from the C# argument types and
+  would ask for `speak(String, …)` and `vibrate(VibrationEffect$OneShot)`. Neither
+  has been run on a handset yet.
+
+All of them are wired into `SCN_GAME` (four on `Presentation`, the graphics view
+on its own `Broadcast` object). Captures and a before/after page are in
+`SCREENSHOTS/broadcast_report.html`. Two layout facts came from those captures,
+not from reading: the HUD's score row is **146** units tall (the ribbon sits at
+222), and the result banner and carrier chip moved down to make room
+(`Systems_HudView.BANNER_CLEARANCE` 164 → 200). The Game view held 60 FPS in
+every capture, but the frame cost has **not** been profiled.

@@ -21,4 +21,30 @@ namespace PoFootball.Models
         Safety = 8,
         Fullback = 9
     }
+
+    public static class Systems_PlayerRoleExtensions
+    {
+        /// <summary>
+        /// Whether this role is a pass catcher by design: the receivers and both
+        /// backs. Read by the separation reward, the scripted quarterback's reads and
+        /// the officials' pass-interference and holding calls.
+        ///
+        /// NOT who can physically catch the ball. Systems_BallSystem.IsPassTargetRole
+        /// is deliberately broader — anyone but the offensive line — so a trick play
+        /// that hands off first can still throw to the quarterback.
+        /// </summary>
+        public static bool IsEligibleReceiver(this Systems_PlayerRole role)
+        {
+            switch (role)
+            {
+                case Systems_PlayerRole.WideReceiver:
+                case Systems_PlayerRole.TightEnd:
+                case Systems_PlayerRole.RunningBack:
+                case Systems_PlayerRole.Fullback:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
 }

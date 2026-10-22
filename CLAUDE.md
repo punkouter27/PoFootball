@@ -1,4 +1,8 @@
-# CLAUDE.md — PoFootball
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# PoFootball
 
 2D American football simulation. Players are flat 2D shapes whose geometry encodes
 position (QB, receiver, lineman, defender, …); the game simulates a football game
@@ -172,7 +176,19 @@ away from him and moved at 13-15% of top speed; at the line ~1 m/s, so no sacks 
 three million steps and 89% of throws complete. It had been fitted for ~5M steps
 while standing off paid. `football_base23` (`FootballBase23`) therefore trains the
 DEFENSE BRAIN FROM SCRATCH while Offense, Quarterback and DefenseCall keep base22's
-weights, through per-behavior `init_path` in the config — no `--initialize-from`.)
+weights, through per-behavior `init_path` in the config — no `--initialize-from`.
+`football_base24` (`FootballBase24`, written 2026-10-22, NOT YET RUN) continues all
+four brains from base23's weights with one reward change, so still revision 16: a
+defender is paid the fall in its TIME TO INTERCEPT the ball, not the distance
+closed — closing distance is minimised by running at where the carrier is, which
+at equal top speeds catches nobody. Potential-based shaping
+(`Reward_Role.InterceptShaping`, Φ = 0.012·(8 − min(t, 8)), γ = 0.99 over 5 ticks):
+policy-invariant, bounded at 0.096 per defender per play, nothing to a defender
+out of reach. Its `init_path`s name `results/football_base23/*/checkpoint.pt`. The
+whole `results/` folder (base12-23, 3.6 GB) had been sent to the Windows Recycle
+Bin; on 2026-10-22 only `football_base23` was COPIED back (158 MB), so every other
+run's results, `results/realism/` and the launcher scripts are still in the bin.
+Rebuild the env first.)
 Revision 16 (2026-10-16) gives the defense's front A BRAIN OF ITS OWN. Revision 15
 read it off a second branch of the Defense brain, sampled from the middle
 linebacker alone, and `football_base17` called the zero blitz on 37% of plays at
@@ -631,6 +647,36 @@ inventory and the precedence order.
 - `unity status` — is an Editor connected?
 - `unity list` / `unity command` — tools the Pipeline package exposes.
 - `unity test` / `unity build` — batch-mode runs.
+
+**Running tests** (detail and failure modes in [docs/TOOLING.md](docs/TOOLING.md)).
+Always scope to this project's assemblies — unfiltered is 370 tests, 232 of them
+from `com.besty.unity-skills`, one of which fails for unrelated reasons:
+
+```powershell
+# EditMode (Assets/Tests/EditMode). Blocks the Editor's main thread — pass a long timeout.
+unity command --timeout 600 run_tests --mode editor --filter PoFootball --filter_type assembly
+# PlayMode (Assets/Tests/PlayMode). Must be async; poll test_status until "completed".
+unity command run_tests --mode playmode --async_tests --filter PoFootball --filter_type assembly
+```
+
+`--assembly X` is silently ignored and runs everything; the flag pair above is the
+filter. Never start a run while play mode is active. Check the Editor actually
+reloaded the domain first (see the LFS note above) — a stale domain passes tests
+against old assemblies.
+
+**Assembly layering** (asmdefs enforce it; a new reference that breaks it will not compile):
+
+```
+PoFootball.Models    (Systems/Model)  — pure data, references nothing
+PoFootball.Systems   → Models                      — rules, referee, game flow; NO ML-Agents
+PoFootball.Views     → Models, Systems             — UI Toolkit, audio, presentation
+PoFootball.Rewards   → Models
+PoFootball.Sensors   → Models, Unity.ML-Agents
+PoFootball.Agents    → Models, Systems, Sensors, Rewards, Unity.ML-Agents
+```
+
+Agents is the only assembly that sees everything; Systems reaches training only
+through the `Systems_I*` interfaces described above.
 
 `.claude/` ships 20 agents, 27 commands, 42 skills and 26 hooks from
 everything-claude-unity. The hooks block direct `.unity`/`.meta` edits on purpose —

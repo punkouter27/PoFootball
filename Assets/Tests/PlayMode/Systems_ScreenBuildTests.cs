@@ -499,13 +499,15 @@ namespace PoFootball.Tests
             System.Collections.Generic.List<VisualElement> all = Descendants(root);
 
             Assert.That(HasButton(all, "SETTINGS"), Is.True, "no SETTINGS button");
-            Assert.That(root.Q("SettingsTabs").childCount, Is.EqualTo(2), "the sheet is not tabbed");
+            Assert.That(root.Q("SettingsTabs").childCount, Is.EqualTo(3), "the sheet is not tabbed");
 
             VisualElement soundPane = root.Q("SoundPane");
             VisualElement seedPane = root.Q("SeedPane");
+            VisualElement broadcastPane = root.Q("BroadcastPane");
 
             Assert.That(soundPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.Flex), "SOUND is not the first tab");
             Assert.That(seedPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.None), "both panes are showing");
+            Assert.That(broadcastPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.None), "the broadcast pane is showing");
 
             Button seedTab = FindButton(all, "GAME SEED");
 
@@ -519,6 +521,19 @@ namespace PoFootball.Tests
 
             Assert.That(seedPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.Flex), "the GAME SEED tab did nothing");
             Assert.That(soundPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.None), "both panes are showing");
+
+            Button broadcastTab = FindButton(all, "BROADCAST");
+
+            using (NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled())
+            {
+                submit.target = broadcastTab;
+                broadcastTab.SendEvent(submit);
+            }
+
+            yield return null;
+
+            Assert.That(broadcastPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.Flex), "the BROADCAST tab did nothing");
+            Assert.That(seedPane.resolvedStyle.display, Is.EqualTo(DisplayStyle.None), "two panes are showing");
         }
 
         private static IEnumerator WaitForScene(string sceneName)

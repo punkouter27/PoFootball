@@ -151,9 +151,9 @@ namespace PoFootball.Systems
             // Home receives the opening kickoff, so Away kicks it — a played
             // kickoff since revision 14, where it used to be Home's ball on its 35.
             _game.KickOff(
-                Systems_TeamId.Home, OwnYardLineToY(Systems_GameRules.KICKOFF_TOUCHBACK_YARD_LINE));
+                Systems_TeamId.Home, Systems_FieldModel.OwnYardLineToY(Systems_GameRules.KICKOFF_TOUCHBACK_YARD_LINE));
             _game.PrepareKick(
-                Systems_TeamId.Away, OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE), false);
+                Systems_TeamId.Away, Systems_FieldModel.OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE), false);
         }
 
         /// <summary>
@@ -479,7 +479,7 @@ namespace PoFootball.Systems
         /// </summary>
         private float YardsGainedBy(Systems_PlayEndedMessage message, float spotY)
         {
-            if (message.Kind != Systems_PlayKind.Scrimmage && message.Kind != Systems_PlayKind.TwoPoint)
+            if (!message.Kind.HasLiveCall())
             {
                 return 0f;
             }
@@ -616,7 +616,7 @@ namespace PoFootball.Systems
                     // The side that conceded free-kicks from its own 20.
                     _game.PrepareKick(
                         scorer.Opponent(),
-                        OwnYardLineToY(Systems_GameRules.SAFETY_FREE_KICK_YARD_LINE),
+                        Systems_FieldModel.OwnYardLineToY(Systems_GameRules.SAFETY_FREE_KICK_YARD_LINE),
                         false);
 
                     return Systems_DownResult.Safety;
@@ -639,7 +639,7 @@ namespace PoFootball.Systems
 
                     float takeover = Mathf.Max(
                         Mirror(spotOfKick),
-                        OwnYardLineToY(Systems_GameRules.MISSED_FIELD_GOAL_MIN_YARD_LINE));
+                        Systems_FieldModel.OwnYardLineToY(Systems_GameRules.MISSED_FIELD_GOAL_MIN_YARD_LINE));
 
                     GiveBall(defense, ClampSeriesStart(takeover));
                     return Systems_DownResult.FieldGoalMissed;
@@ -653,7 +653,7 @@ namespace PoFootball.Systems
                         ? Systems_GameRules.KICKOFF_TOUCHBACK_YARD_LINE
                         : Systems_GameRules.TOUCHBACK_YARD_LINE;
 
-                    GiveBall(receiver, OwnYardLineToY(yardLine));
+                    GiveBall(receiver, Systems_FieldModel.OwnYardLineToY(yardLine));
                     return Systems_DownResult.Touchback;
                 }
 
@@ -803,7 +803,7 @@ namespace PoFootball.Systems
         {
             _game.PrepareKick(
                 kickingTeam,
-                OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
+                Systems_FieldModel.OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
                 ShouldTryOnside(kickingTeam));
         }
 
@@ -940,7 +940,7 @@ namespace PoFootball.Systems
                 // snap). A return touchdown it fouled on comes back.
                 float yards = HalfTheDistance(
                     foul.Type.Yards(),
-                    (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - foul.SpotY) / Systems_FieldModel.YARD);
+                    Systems_FieldModel.YardsToAttackingGoal(foul.SpotY));
 
                 float spot = foul.SpotY + (yards * Systems_FieldModel.YARD);
 
@@ -948,7 +948,7 @@ namespace PoFootball.Systems
                     foul, foulTeam, yards, ReturnOutcomeOf(message), Systems_TeamSide.Defense, spot);
             }
 
-            if (message.Kind.IsKick() || message.Kind == Systems_PlayKind.Kickoff)
+            if (message.Kind.IsKick())
             {
                 // A defensive foul on a kick the kicking team does not want back:
                 // decline it and keep the field position the kick won.
@@ -976,7 +976,7 @@ namespace PoFootball.Systems
             {
                 yardsAwarded = HalfTheDistance(
                     foul.Type.Yards(),
-                    (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - enforcedFrom) / Systems_FieldModel.YARD);
+                    Systems_FieldModel.YardsToAttackingGoal(enforcedFrom));
 
                 newLine = enforcedFrom + (yardsAwarded * Systems_FieldModel.YARD);
             }
@@ -1088,7 +1088,7 @@ namespace PoFootball.Systems
             {
                 _game.AddPoints(offense.Opponent(), Systems_GameRules.SAFETY_POINTS);
                 _game.PrepareKick(
-                    offense, OwnYardLineToY(Systems_GameRules.SAFETY_FREE_KICK_YARD_LINE), false);
+                    offense, Systems_FieldModel.OwnYardLineToY(Systems_GameRules.SAFETY_FREE_KICK_YARD_LINE), false);
 
                 return new Systems_FoulRuling(
                     Systems_FoulDecision.Enforced, foul, offense, 0f, Systems_DownResult.Safety);
@@ -1275,19 +1275,13 @@ namespace PoFootball.Systems
         }
 
         /// <summary>
-        /// A rough expected-points value for the offense of having the ball here, on
-        /// this down, with this far to go: about minus one and a half at its own
-        /// goal line rising to five at the other one, less for each down used and
-        /// each yard still to gain. Only ever compared with itself, to accept or
-        /// decline a penalty, so the shape matters and the scale does not.
+        /// The shared curve (Systems_ExpectedPoints), which the broadcast's win
+        /// probability also reads. Here it is only ever compared with itself, to
+        /// accept or decline a penalty, so the shape matters and the scale does not.
         /// </summary>
         private static float ExpectedPoints(float lineY, int down, float yardsToGo)
         {
-            float yardLine = (lineY - Systems_FieldModel.OWN_GOAL_LINE_Y) / Systems_FieldModel.YARD;
-
-            return -1.6f + (0.068f * yardLine)
-                - (0.45f * (Mathf.Clamp(down, 1, 4) - 1))
-                - (0.04f * (yardsToGo - Systems_GameRules.YARDS_TO_GAIN));
+            return Systems_ExpectedPoints.Of(lineY, down, yardsToGo);
         }
 
         /// <summary>
@@ -1298,7 +1292,9 @@ namespace PoFootball.Systems
         {
             if (message.Outcome == Systems_PlayOutcome.Touchdown)
             {
-                return message.Side == Systems_TeamSide.Offense ? 6.9f : -6.9f;
+                return message.Side == Systems_TeamSide.Offense
+                    ? Systems_ExpectedPoints.TOUCHDOWN
+                    : -Systems_ExpectedPoints.TOUCHDOWN;
             }
 
             if (DefenseEndedWithBall(message))
@@ -1594,7 +1590,7 @@ namespace PoFootball.Systems
                     // for the overtime coin toss.
                     _game.PrepareKick(
                         _game.OpeningPossession,
-                        OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
+                        Systems_FieldModel.OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
                         false);
 
                     return announceScore ? resultSoFar : Systems_DownResult.EndOfQuarter;
@@ -1619,7 +1615,7 @@ namespace PoFootball.Systems
 
                 _game.PrepareKick(
                     _game.OpeningPossession,
-                    OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
+                    Systems_FieldModel.OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
                     false);
             }
 
@@ -1909,12 +1905,6 @@ namespace PoFootball.Systems
         private static float Mirror(float y)
         {
             return -y;
-        }
-
-        /// <summary>Own N-yard line expressed in the attacking frame.</summary>
-        private static float OwnYardLineToY(float yardLine)
-        {
-            return Systems_FieldModel.OWN_GOAL_LINE_Y + (yardLine * Systems_FieldModel.YARD);
         }
 
         /// <summary>Keeps a dead-ball spot inside the field, end zones included.</summary>

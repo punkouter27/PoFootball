@@ -109,11 +109,6 @@ namespace PoFootball.Systems
         }
 
         /// <summary>
-        /// The starting position of a squad slot, 0..21, under the formations
-        /// currently drawn. Offense occupies 0..10 and defense 11..21, which is the
-        /// same absolute indexing every agent in the scene already carries.
-        /// </summary>
-        /// <summary>
         /// The kind of snap whose special-teams alignment is on the field, or
         /// Scrimmage when it is an ordinary one. Revision 14.
         /// </summary>
@@ -134,6 +129,11 @@ namespace PoFootball.Systems
                 : Systems_PlayKind.Scrimmage;
         }
 
+        /// <summary>
+        /// The starting position of a squad slot, 0..21, under the formations
+        /// currently drawn. Offense occupies 0..10 and defense 11..21, which is the
+        /// same absolute indexing every agent in the scene already carries.
+        /// </summary>
         public Systems_FormationSlot GetSlot(int slotIndex)
         {
             if (IsSpecialTeams)

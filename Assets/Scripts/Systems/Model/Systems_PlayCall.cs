@@ -63,5 +63,11 @@ namespace PoFootball.Models
         {
             return call == Systems_PlayCall.Pass || call == Systems_PlayCall.PassDeep;
         }
+
+        /// <summary>Either kick call: the fourth-down calls that change the formation.</summary>
+        public static bool IsKick(this Systems_PlayCall call)
+        {
+            return call == Systems_PlayCall.Punt || call == Systems_PlayCall.FieldGoal;
+        }
     }
 }

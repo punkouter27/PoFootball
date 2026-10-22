@@ -204,8 +204,7 @@ namespace PoFootball.Agents
                 case Systems_PlayKind.Kickoff:
                     stats.Add(
                         "Kick/KickoffReceivingYardLine",
-                        (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - message.Spot.y)
-                            / Systems_FieldModel.YARD);
+                        Systems_FieldModel.YardsToAttackingGoal(message.Spot.y));
                     stats.Add(
                         "Kick/OnsideRecoveredRate",
                         message.Outcome == Systems_PlayOutcome.KickRecovered ? 1f : 0f);

@@ -35,9 +35,20 @@ namespace PoFootball.Agents
     {
         private Systems_PlayModel _play;
         private Systems_FormationSelection _formations;
-        private Systems_FieldModel _field;
+        private Systems_ICallSheetSink _callSheet;
+        private BehaviorParameters _behaviorParameters;
 
         private readonly float[] _observation = new float[Sensor_DefenseCallState.OBSERVATION_SIZE];
+
+        // The call sheet: chances over the branch (index 0 is "no call") and over
+        // the fronts, and the mask the brain decided under. Allocated once.
+        private readonly float[] _branchChances = new float[Agent_ActionContract.DEFENSE_CALL_SLOTS + 1];
+        private readonly float[] _frontChances = new float[Agent_ActionContract.DEFENSE_CALL_SLOTS];
+        private readonly bool[] _branchEnabled = BuildBranchMask();
+
+        /// <summary>Built on the first call a trained brain makes with someone watching.</summary>
+        private Agent_PolicySampler _sampler;
+        private bool _samplerTried;
 
         private string[] _statKeys;
 
@@ -56,7 +67,7 @@ namespace PoFootball.Agents
             Transform parent,
             Systems_PlayModel play,
             Systems_FormationSelection formations,
-            Systems_FieldModel field)
+            Systems_ICallSheetSink callSheet)
         {
             GameObject host = new GameObject(nameof(Agent_DefensiveCoordinator));
             host.SetActive(false);
@@ -76,10 +87,29 @@ namespace PoFootball.Agents
             Agent_DefensiveCoordinator coordinator = host.AddComponent<Agent_DefensiveCoordinator>();
             coordinator._play = play;
             coordinator._formations = formations;
-            coordinator._field = field ?? new Systems_FieldModel();
+            coordinator._callSheet = callSheet;
+            coordinator._behaviorParameters = behaviorParameters;
 
             host.SetActive(true);
             return coordinator;
+        }
+
+        private static bool[] BuildBranchMask()
+        {
+            bool[] enabled = new bool[Agent_ActionContract.DEFENSE_CALL_SLOTS + 1];
+
+            for (int slot = 1; slot < enabled.Length; slot++)
+            {
+                enabled[slot] = true;
+            }
+
+            return enabled;
+        }
+
+        private void OnDestroy()
+        {
+            _sampler?.Dispose();
+            _sampler = null;
         }
 
         public override void Initialize()
@@ -109,7 +139,7 @@ namespace PoFootball.Agents
 
             // Ordinary downs and two-point tries only: a kick, a kneel and a spike
             // have no front to call.
-            if (_play.Kind != Systems_PlayKind.Scrimmage && _play.Kind != Systems_PlayKind.TwoPoint)
+            if (!_play.Kind.HasLiveCall())
             {
                 return;
             }
@@ -125,7 +155,7 @@ namespace PoFootball.Agents
                 return;
             }
 
-            float yardsToGoal = _field.YardsToAttackingGoal(_play.LineOfScrimmageY);
+            float yardsToGoal = Systems_FieldModel.YardsToAttackingGoal(_play.LineOfScrimmageY);
 
             Sensor_DefenseCallState.Write(
                 _observation,
@@ -159,6 +189,8 @@ namespace PoFootball.Agents
             _play.CallDefense(branchIndex - 1);
             AwaitingReward = true;
 
+            ReportCallSheet(branchIndex - 1);
+
             if (Academy.IsInitialized && Academy.Instance.IsCommunicatorOn && _statKeys != null)
             {
                 StatsRecorder stats = Academy.Instance.StatsRecorder;
@@ -178,6 +210,67 @@ namespace PoFootball.Agents
         {
             ActionSegment<int> discrete = actionsOut.DiscreteActions;
             discrete[0] = _formations == null ? 1 : (int)_formations.Defense + 1;
+        }
+
+        /// <summary>
+        /// Tells the broadcast what the front was chosen from.
+        ///
+        /// THREE HONEST ANSWERS. The scripted coordinator calls the front that was
+        /// drawn, and the draw is uniform over the eight, so its chances are an even
+        /// eighth each — the sheet says SCRIPTED and shows exactly that. A trained
+        /// brain's chances are sampled from its own .onnx on the observation it
+        /// just decided on (Agent_PolicySampler). If that cannot be done, only the
+        /// call is reported. Never while training: the sink is the no-op binding
+        /// there, and with a trainer attached the decision is remote anyway.
+        /// </summary>
+        private void ReportCallSheet(int front)
+        {
+            if (_callSheet == null || !_callSheet.Available || _play == null)
+            {
+                return;
+            }
+
+            bool scripted = _behaviorParameters == null
+                || _behaviorParameters.Model == null
+                || _behaviorParameters.IsInHeuristicMode();
+
+            if (scripted)
+            {
+                float even = 1f / _frontChances.Length;
+
+                for (int index = 0; index < _frontChances.Length; index++)
+                {
+                    _frontChances[index] = even;
+                }
+
+                _callSheet.ReportDefense(_play.EpisodeIndex, _frontChances, Systems_CallSource.Scripted);
+                return;
+            }
+
+            if (!_samplerTried)
+            {
+                _samplerTried = true;
+                _sampler = Agent_PolicySampler.Create(
+                    _behaviorParameters.Model, Sensor_DefenseCallState.OBSERVATION_SIZE, _branchChances.Length);
+            }
+
+            if (_sampler != null && _sampler.TrySample(_observation, _branchEnabled, _branchChances))
+            {
+                for (int index = 0; index < _frontChances.Length; index++)
+                {
+                    _frontChances[index] = _branchChances[index + 1];
+                }
+
+                _callSheet.ReportDefense(_play.EpisodeIndex, _frontChances, Systems_CallSource.Policy);
+                return;
+            }
+
+            for (int index = 0; index < _frontChances.Length; index++)
+            {
+                _frontChances[index] = index == front ? 1f : 0f;
+            }
+
+            _callSheet.ReportDefense(_play.EpisodeIndex, _frontChances, Systems_CallSource.PolicyChoiceOnly);
         }
 
         /// <summary>The play's defensive terminal reward, and the end of its one-step episode.</summary>

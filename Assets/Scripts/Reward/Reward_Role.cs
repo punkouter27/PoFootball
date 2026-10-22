@@ -43,16 +43,7 @@ namespace PoFootball.Rewards
         /// </summary>
         public static bool IsReceiver(Systems_PlayerRole role)
         {
-            switch (role)
-            {
-                case Systems_PlayerRole.WideReceiver:
-                case Systems_PlayerRole.TightEnd:
-                case Systems_PlayerRole.RunningBack:
-                case Systems_PlayerRole.Fullback:
-                    return true;
-                default:
-                    return false;
-            }
+            return role.IsEligibleReceiver();
         }
 
         /// <summary>
@@ -131,7 +122,9 @@ namespace PoFootball.Rewards
         }
 
         /// <summary>
-        /// Signed reward for closing on the ball over one tick. metresClosed is the
+        /// Signed reward for closing on the ball over one tick — since
+        /// football_base24 the OFFENSE's term only, chasing a defender who has the
+        /// ball; the defense is paid <see cref="InterceptShaping"/>. metresClosed is the
         /// previous distance minus the current one, so drifting away is a small
         /// negative — which is the half that matters. A purely positive pursuit
         /// term is satisfied by a defender who sits still and lets the play come to
@@ -140,6 +133,155 @@ namespace PoFootball.Rewards
         public static float Pursuit(float metresClosed)
         {
             return metresClosed * Systems_SimConstants.PURSUIT_REWARD_PER_METRE;
+        }
+
+        // --- The defense's pursuit: an angle, not a chase (football_base24) -----
+
+        /// <summary>
+        /// What being one second nearer an intercept is worth to a defender, in
+        /// the potential <see cref="InterceptPotential"/>.
+        ///
+        /// SIZED AGAINST THE TACKLE, NOT AGAINST THE OLD TERM. The potential runs
+        /// from 0 (out of reach) to INTERCEPT_POTENTIAL_PER_SECOND times
+        /// <see cref="INTERCEPT_HORIZON_SECONDS"/> = 0.096 (on the ball), and the
+        /// shaping telescopes, so the most one defender can collect over a whole
+        /// play is that 0.096: a fifth of TACKLE_REWARD (0.5), under the quarter of
+        /// a touchdown Reward_Tests allows any shaped term. The distance term it
+        /// replaces for the defense paid 0.004 a metre, ~0.12 for a 30 m closing
+        /// run, so the defense's total shaping budget is about where it was — what
+        /// moved is WHICH movement earns it.
+        /// </summary>
+        public const float INTERCEPT_POTENTIAL_PER_SECOND = 0.012f;
+
+        /// <summary>
+        /// Intercepts further off than this all count as "out of reach". Eight
+        /// seconds is ~70 m at a corner's top speed, most of the field: anything
+        /// longer is a solution that the carrier's next cut will invalidate anyway,
+        /// and a cap is what makes the potential (and so the per-play total) bounded.
+        /// </summary>
+        public const float INTERCEPT_HORIZON_SECONDS = 8f;
+
+        /// <summary>
+        /// The extrinsic gamma of every behavior in Config/FootballBase24.yaml (and
+        /// every config since base11). Potential-based shaping is only
+        /// policy-invariant with the trainer's own discount, so if a config ever
+        /// changes gamma this must change with it.
+        /// </summary>
+        public const float TRAINER_GAMMA = 0.99f;
+
+        /// <summary>
+        /// The trainer's per-DECISION gamma spread over the DECISION_PERIOD physics
+        /// ticks a decision spans: rewards are added every tick and summed into one
+        /// step, so paying gamma_tick * Phi' - Phi per tick telescopes to the
+        /// per-step form up to O(1 - gamma_tick) = 0.002 of one tick's potential.
+        /// Computed once, never per tick.
+        /// </summary>
+        public static readonly float TickDiscount =
+            Mathf.Pow(TRAINER_GAMMA, 1f / Systems_SimConstants.DECISION_PERIOD);
+
+        /// <summary>
+        /// Seconds until a pursuer running flat out at <paramref name="pursuerSpeed"/>
+        /// can stand where a target moving at constant <paramref name="targetVelocity"/>
+        /// will be — the earliest t with |target + v t - pursuer| = s t — or
+        /// +infinity when no such t exists (a faster target running away).
+        ///
+        /// WHY THIS AND NOT DISTANCE. Distance is minimised by running AT the
+        /// carrier, which means arriving where he was; Agent_FootballPlayer's own
+        /// InterceptOf says why that catches nobody at equal speed. Time to
+        /// intercept is minimised by cutting the angle — the defender who takes
+        /// the right one sees it fall by a full second every second, the one
+        /// chasing the back of a faster man sees it never come down. Paying its
+        /// fall pays for the angle.
+        ///
+        /// Closed form: with d = target - pursuer, (v.v - s^2) t^2 + 2 (d.v) t +
+        /// d.d = 0, smallest non-negative root. Pure, allocation-free, Models only.
+        /// </summary>
+        public static float InterceptSeconds(
+            Vector2 pursuerPosition, float pursuerSpeed,
+            Vector2 targetPosition, Vector2 targetVelocity)
+        {
+            Vector2 offset = targetPosition - pursuerPosition;
+            float c = Vector2.Dot(offset, offset);
+
+            if (c < 1e-6f)
+            {
+                return 0f;
+            }
+
+            if (pursuerSpeed <= 1e-3f)
+            {
+                return float.PositiveInfinity;
+            }
+
+            float a = Vector2.Dot(targetVelocity, targetVelocity) - (pursuerSpeed * pursuerSpeed);
+            float b = 2f * Vector2.Dot(offset, targetVelocity);
+
+            // Equal speeds: the quadratic is linear, and only a target coming
+            // toward the pursuer (b < 0) can be met.
+            if (Mathf.Abs(a) < 1e-5f)
+            {
+                return b < 0f ? -c / b : float.PositiveInfinity;
+            }
+
+            float discriminant = (b * b) - (4f * a * c);
+
+            if (discriminant < 0f)
+            {
+                return float.PositiveInfinity;
+            }
+
+            float root = Mathf.Sqrt(discriminant);
+            float first = (-b - root) / (2f * a);
+            float second = (-b + root) / (2f * a);
+
+            float earliest = float.PositiveInfinity;
+
+            if (first >= 0f)
+            {
+                earliest = first;
+            }
+
+            if (second >= 0f && second < earliest)
+            {
+                earliest = second;
+            }
+
+            return earliest;
+        }
+
+        /// <summary>
+        /// Phi for a defender: INTERCEPT_POTENTIAL_PER_SECOND times how far INSIDE
+        /// the horizon its intercept is. Zero out of reach, 0.096 on the ball.
+        ///
+        /// NON-NEGATIVE ON PURPOSE. Shaping is gamma Phi' - Phi, so a defender who
+        /// holds still at constant Phi is paid (gamma - 1) Phi. With Phi = -k t (the
+        /// obvious sign) that is POSITIVE and largest far from the ball — a drip
+        /// for standing off, the exact habit base22's defense had. Shifted to
+        /// k (horizon - t), the same differences (so the same invariance) but the
+        /// drip is zero out of reach and slightly negative close in: shadowing a
+        /// carrier without ever closing — what base20's defenders learned when the
+        /// stall paid — costs a little every tick instead of nothing.
+        /// </summary>
+        public static float InterceptPotential(float interceptSeconds)
+        {
+            if (float.IsNaN(interceptSeconds) || interceptSeconds >= INTERCEPT_HORIZON_SECONDS)
+            {
+                return 0f;
+            }
+
+            return INTERCEPT_POTENTIAL_PER_SECOND
+                * (INTERCEPT_HORIZON_SECONDS - Mathf.Max(0f, interceptSeconds));
+        }
+
+        /// <summary>
+        /// One tick of the defense's pursuit: gamma_tick Phi(now) - Phi(before).
+        /// Potential-based (Ng, Harada and Russell 1999), so it cannot change which
+        /// policy is optimal, only how fast the defense finds it; and because Phi is
+        /// bounded in [0, 0.096] the whole play's sum is bounded by the same.
+        /// </summary>
+        public static float InterceptShaping(float previousPotential, float currentPotential)
+        {
+            return (TickDiscount * currentPotential) - previousPotential;
         }
     }
 }

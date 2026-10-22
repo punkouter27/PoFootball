@@ -593,6 +593,114 @@ namespace PoFootball.Tests
             Assert.That(Reward_Role.Pursuit(0f), Is.EqualTo(0f));
         }
 
+        // --- The defense's intercept shaping (football_base24) -----------------
+
+        /// <summary>Running straight at each other at 5 m/s each from 20 m: 2 s.</summary>
+        [Test]
+        public void InterceptSeconds_HeadOn_IsDistanceOverClosingSpeed()
+        {
+            float seconds = Reward_Role.InterceptSeconds(
+                Vector2.zero, 5f, new Vector2(0f, 20f), new Vector2(0f, -5f));
+
+            Assert.That(seconds, Is.EqualTo(2f).Within(1e-4f));
+        }
+
+        /// <summary>A 6 m/s defender behind a 4 m/s carrier 10 m ahead: 5 s.</summary>
+        [Test]
+        public void InterceptSeconds_ChaseFromBehind_IsGapOverSpeedDifference()
+        {
+            float seconds = Reward_Role.InterceptSeconds(
+                Vector2.zero, 6f, new Vector2(0f, 10f), new Vector2(0f, 4f));
+
+            Assert.That(seconds, Is.EqualTo(5f).Within(1e-4f));
+        }
+
+        /// <summary>
+        /// A faster carrier running away can never be met — and an equal-speed one
+        /// running away cannot either, which is the case the linear branch exists for.
+        /// </summary>
+        [Test]
+        public void InterceptSeconds_ARunnerPullingAway_IsOutOfReach()
+        {
+            Assert.That(
+                float.IsPositiveInfinity(Reward_Role.InterceptSeconds(
+                    Vector2.zero, 6f, new Vector2(0f, 10f), new Vector2(0f, 8f))),
+                Is.True);
+            Assert.That(
+                float.IsPositiveInfinity(Reward_Role.InterceptSeconds(
+                    Vector2.zero, 6f, new Vector2(0f, 10f), new Vector2(0f, 6f))),
+                Is.True);
+            Assert.That(
+                Reward_Role.InterceptPotential(float.PositiveInfinity), Is.EqualTo(0f));
+        }
+
+        /// <summary>
+        /// A crossing carrier: the solution is a real meeting point (the defender
+        /// covers exactly s t to reach where the carrier is at t), and it is sooner
+        /// than chasing the carrier's current spot would suggest is possible at all.
+        /// </summary>
+        [Test]
+        public void InterceptSeconds_ACrossingCarrier_MeetsAtTheSolvedPoint()
+        {
+            Vector2 carrier = new Vector2(-10f, 10f);
+            Vector2 velocity = new Vector2(7f, 0f);
+            float speed = 7f;
+
+            float seconds = Reward_Role.InterceptSeconds(Vector2.zero, speed, carrier, velocity);
+
+            Assert.That(float.IsPositiveInfinity(seconds), Is.False);
+
+            Vector2 meeting = carrier + (velocity * seconds);
+            Assert.That(meeting.magnitude, Is.EqualTo(speed * seconds).Within(1e-3f));
+        }
+
+        /// <summary>
+        /// The angle is what pays: a defender who cuts toward the meeting point
+        /// earns positive shaping, one who runs away from it earns negative, and
+        /// one who stays out of reach earns exactly nothing — no drip for standing
+        /// off, the habit base22's defense had.
+        /// </summary>
+        [Test]
+        public void InterceptShaping_PaysTheCutCostsTheRetreatAndIgnoresTheDistant()
+        {
+            Vector2 carrier = new Vector2(0f, 20f);
+            Vector2 velocity = new Vector2(0f, -4f);
+            float speed = 8f;
+
+            float before = Reward_Role.InterceptPotential(
+                Reward_Role.InterceptSeconds(Vector2.zero, speed, carrier, velocity));
+
+            // One tick later the carrier has moved on; the defender either closed
+            // or backed off.
+            Vector2 carrierNext = carrier + (velocity * 0.02f);
+            float closed = Reward_Role.InterceptPotential(Reward_Role.InterceptSeconds(
+                new Vector2(0f, speed * 0.02f), speed, carrierNext, velocity));
+            float retreated = Reward_Role.InterceptPotential(Reward_Role.InterceptSeconds(
+                new Vector2(0f, -speed * 0.02f), speed, carrierNext, velocity));
+
+            Assert.That(Reward_Role.InterceptShaping(before, closed), Is.GreaterThan(0f));
+            Assert.That(Reward_Role.InterceptShaping(before, retreated), Is.LessThan(0f));
+            Assert.That(Reward_Role.InterceptShaping(0f, 0f), Is.EqualTo(0f));
+        }
+
+        /// <summary>
+        /// The potential is bounded, so a whole play's intercept shaping is too:
+        /// under a quarter of a touchdown and well under a tackle, like every other
+        /// shaped term (see RoleShapedTerms_CannotOutweighTheTerminalRewardOverAWholePlay).
+        /// </summary>
+        [Test]
+        public void InterceptPotential_IsBoundedWellBelowATackle()
+        {
+            float onTheBall = Reward_Role.InterceptPotential(0f);
+
+            Assert.That(onTheBall, Is.GreaterThan(0f));
+            Assert.That(onTheBall, Is.LessThan(Systems_SimConstants.TOUCHDOWN_REWARD * 0.25f));
+            Assert.That(onTheBall, Is.LessThan(Systems_SimConstants.TACKLE_REWARD * 0.25f));
+            Assert.That(
+                Reward_Role.InterceptPotential(Reward_Role.INTERCEPT_HORIZON_SECONDS + 1f),
+                Is.EqualTo(0f));
+        }
+
         [Test]
         public void RoleClassification_DoesNotOverlap()
         {

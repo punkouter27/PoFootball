@@ -527,10 +527,7 @@ namespace PoFootball.Systems
         /// <summary>Whether this kind of snap lines up in a kicking formation.</summary>
         public static bool HasSpecialTeamsFormation(Systems_PlayKind kind)
         {
-            return kind == Systems_PlayKind.Kickoff
-                || kind == Systems_PlayKind.Punt
-                || kind == Systems_PlayKind.FieldGoal
-                || kind == Systems_PlayKind.ExtraPoint;
+            return kind.IsKick();
         }
 
         /// <summary>

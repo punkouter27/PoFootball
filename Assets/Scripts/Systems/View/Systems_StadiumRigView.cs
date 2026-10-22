@@ -307,6 +307,29 @@ namespace PoFootball.Views
         private float _shownLeverage;
         private float _appliedLeverage;
 
+        // WEATHER OBEYS THE SAME RULE AS LEVERAGE: IT CAN ONLY TAKE LIGHT AWAY.
+        // Systems_WeatherModel is presentation only, and the rig is the cheapest
+        // place to make rain or a night game read — but a snowy rig that got
+        // BRIGHTER would spend the bloom margin exactly as a leverage boost would.
+        // So the mood is an ambient scale that never exceeds 1 and two tints no
+        // channel of which exceeds 1, multiplied in on top of leverage. Eased
+        // like leverage, because the conditions arrive a few seconds after
+        // kickoff and a light that jumps reads as a fault.
+        //
+        // Null when the scene's scope has no weather registered; the rig is then
+        // exactly what it was.
+        private Systems_WeatherModel _weather;
+        private int _weatherRevision = -1;
+        private float _weatherAmbientScaleTarget = 1f;
+        private Color _weatherAmbientTintTarget = Color.white;
+        private Color _weatherBankTintTarget = Color.white;
+        private float _weatherAmbientScale = 1f;
+        private Color _weatherAmbientTint = Color.white;
+        private Color _weatherBankTint = Color.white;
+
+        /// <summary>Fraction of the way to the target mood per second: about two seconds end to end.</summary>
+        private const float WEATHER_RATE = 0.5f;
+
         /// <summary>Real seconds into the current flash; negative when none is running.</summary>
         private float _flashElapsed = -1f;
 
@@ -316,8 +339,10 @@ namespace PoFootball.Views
             Systems_PlayerRegistry registry,
             Systems_GameModel game,
             Systems_BallModel ball,
+            Systems_WeatherModel weather,
             ISubscriber<Systems_ScoreMessage> scoreSubscriber)
         {
+            _weather = weather;
             _ball = ball;
             _budget = budget;
             _registry = registry;
@@ -380,15 +405,22 @@ namespace PoFootball.Views
             TickScoreFlash();
             AimSpot();
 
+            bool weatherMoved = TickWeather();
+
             if (_game == null)
             {
+                if (weatherMoved)
+                {
+                    ApplyLeverage(_shownLeverage);
+                }
+
                 return;
             }
 
             _shownLeverage = Mathf.MoveTowards(
                 _shownLeverage, Systems_Leverage.Of(_game), LEVERAGE_RATE * Time.deltaTime);
 
-            if (Mathf.Abs(_shownLeverage - _appliedLeverage) < LEVERAGE_EPSILON)
+            if (!weatherMoved && Mathf.Abs(_shownLeverage - _appliedLeverage) < LEVERAGE_EPSILON)
             {
                 return;
             }
@@ -399,18 +431,118 @@ namespace PoFootball.Views
 
         private void ApplyLeverage(float leverage)
         {
-            float ambient = Mathf.Max(0f, _ambientIntensity - (_leverageAmbientDrop * leverage));
-            Color bankColor = Color.Lerp(_bankColor, _leverageBankColor, leverage);
+            float ambient = Mathf.Max(0f, _ambientIntensity - (_leverageAmbientDrop * leverage))
+                * _weatherAmbientScale;
+            Color ambientColor = _ambientColor * _weatherAmbientTint;
+            Color bankColor = Color.Lerp(_bankColor, _leverageBankColor, leverage) * _weatherBankTint;
 
             for (int index = 0; index < _ambients.Count; index++)
             {
                 ((Light2D)_ambients[index]).intensity = ambient;
+                ((Light2D)_ambients[index]).color = ambientColor;
             }
 
             for (int index = 0; index < _banks.Count; index++)
             {
                 ((Light2D)_banks[index]).color = bankColor;
             }
+        }
+
+        /// <summary>
+        /// Picks up new conditions and eases the mood toward them. True on a frame
+        /// where the mood moved and the lights need writing; false on all the
+        /// others, which once the conditions have settled is every frame.
+        /// </summary>
+        private bool TickWeather()
+        {
+            if (_weather == null)
+            {
+                return false;
+            }
+
+            if (_weather.Revision != _weatherRevision)
+            {
+                _weatherRevision = _weather.Revision;
+
+                if (_weather.IsReady)
+                {
+                    SetWeatherTargets(_weather.Condition, _weather.Intensity, _weather.IsDay);
+                }
+            }
+
+            if (Mathf.Approximately(_weatherAmbientScale, _weatherAmbientScaleTarget)
+                && _weatherAmbientTint == _weatherAmbientTintTarget
+                && _weatherBankTint == _weatherBankTintTarget)
+            {
+                return false;
+            }
+
+            // Unscaled: the sky is not game time, and at Sim Speed 8x a two-second
+            // ease would be a flicker.
+            float step = WEATHER_RATE * Time.unscaledDeltaTime;
+
+            _weatherAmbientScale = Mathf.MoveTowards(
+                _weatherAmbientScale, _weatherAmbientScaleTarget, step);
+            _weatherAmbientTint = MoveColorTowards(
+                _weatherAmbientTint, _weatherAmbientTintTarget, step);
+            _weatherBankTint = MoveColorTowards(_weatherBankTint, _weatherBankTintTarget, step);
+            return true;
+        }
+
+        /// <summary>
+        /// The mood for each sky. Every value is at most 1 in every channel — see
+        /// the note on the weather fields. Rain is the darkest and bluest, fog the
+        /// greyest, snow barely dimmer than clear because snow light is bright;
+        /// night takes the ambient down further and cooler, so the floodlights
+        /// carry more of the picture, which is what a night game looks like.
+        /// </summary>
+        private void SetWeatherTargets(Systems_WeatherCondition condition, float intensity, bool isDay)
+        {
+            float scale = 1f;
+            Color ambientTint = Color.white;
+            Color bankTint = Color.white;
+
+            switch (condition)
+            {
+                case Systems_WeatherCondition.Cloudy:
+                    scale = 0.93f;
+                    ambientTint = new Color(0.95f, 0.96f, 0.98f, 1f);
+                    break;
+                case Systems_WeatherCondition.Rain:
+                    scale = Mathf.Lerp(0.9f, 0.78f, intensity);
+                    ambientTint = new Color(0.84f, 0.9f, 1f, 1f);
+                    bankTint = new Color(0.9f, 0.94f, 1f, 1f);
+                    break;
+                case Systems_WeatherCondition.Snow:
+                    scale = 0.95f;
+                    ambientTint = new Color(0.93f, 0.96f, 1f, 1f);
+                    bankTint = new Color(0.95f, 0.97f, 1f, 1f);
+                    break;
+                case Systems_WeatherCondition.Fog:
+                    scale = 0.88f;
+                    ambientTint = new Color(0.92f, 0.93f, 0.94f, 1f);
+                    bankTint = new Color(0.93f, 0.93f, 0.93f, 1f);
+                    break;
+            }
+
+            if (!isDay)
+            {
+                scale *= 0.82f;
+                ambientTint *= new Color(0.86f, 0.9f, 1f, 1f);
+            }
+
+            _weatherAmbientScaleTarget = scale;
+            _weatherAmbientTintTarget = ambientTint;
+            _weatherBankTintTarget = bankTint;
+        }
+
+        private static Color MoveColorTowards(Color current, Color target, float step)
+        {
+            return new Color(
+                Mathf.MoveTowards(current.r, target.r, step),
+                Mathf.MoveTowards(current.g, target.g, step),
+                Mathf.MoveTowards(current.b, target.b, step),
+                Mathf.MoveTowards(current.a, target.a, step));
         }
 
         private void OnScore(Systems_ScoreMessage message)
@@ -603,6 +735,17 @@ namespace PoFootball.Views
                 castsShadows: false);
         }
 
+        /// <summary>
+        /// Builds a light on a child GameObject that starts INACTIVE, configures it,
+        /// and only then activates it.
+        ///
+        /// The order is load-bearing. Light2D registers itself with the 2D renderer
+        /// and generates its mesh in OnEnable, reading lightType and the point radii
+        /// as they stand at that instant. A light created active and configured
+        /// afterwards is registered as a zero-radius Parametric — the enum's default
+        /// — and never rebuilds, so it renders nothing at all while every property
+        /// on it reads correctly in the inspector.
+        /// </summary>
         private void CreatePointLight(
             string lightName, Vector3 position, float intensity, float innerRadius,
             float outerRadius, bool castsShadows)
@@ -625,17 +768,6 @@ namespace PoFootball.Views
             holder.SetActive(true);
         }
 
-        /// <summary>
-        /// Builds a light on a child GameObject that starts INACTIVE, configures it,
-        /// and only then activates it.
-        ///
-        /// The order is load-bearing. Light2D registers itself with the 2D renderer
-        /// and generates its mesh in OnEnable, reading lightType and the point radii
-        /// as they stand at that instant. A light created active and configured
-        /// afterwards is registered as a zero-radius Parametric — the enum's default
-        /// — and never rebuilds, so it renders nothing at all while every property
-        /// on it reads correctly in the inspector.
-        /// </summary>
         /// <summary>
         /// Creates the child GameObject a light will live on, inactive.
         ///

@@ -69,9 +69,9 @@ namespace PoFootball.Tests
         [Test]
         public void Sidelines_AreDetectedOnBothEdges()
         {
-            Assert.That(_field.IsOutsideSidelines(Systems_FieldModel.HALF_WIDTH + 0.01f), Is.True);
-            Assert.That(_field.IsOutsideSidelines(-Systems_FieldModel.HALF_WIDTH - 0.01f), Is.True);
-            Assert.That(_field.IsOutsideSidelines(0f), Is.False);
+            Assert.That(Systems_FieldModel.IsOutsideSidelines(Systems_FieldModel.HALF_WIDTH + 0.01f), Is.True);
+            Assert.That(Systems_FieldModel.IsOutsideSidelines(-Systems_FieldModel.HALF_WIDTH - 0.01f), Is.True);
+            Assert.That(Systems_FieldModel.IsOutsideSidelines(0f), Is.False);
         }
 
         [Test]
@@ -85,22 +85,22 @@ namespace PoFootball.Tests
         public void YardsToGoal_IsZeroAtTheGoalLine_And100AtTheOwn()
         {
             Assert.That(
-                _field.YardsToAttackingGoal(Systems_FieldModel.ATTACKING_GOAL_LINE_Y),
+                Systems_FieldModel.YardsToAttackingGoal(Systems_FieldModel.ATTACKING_GOAL_LINE_Y),
                 Is.EqualTo(0f).Within(0.01f));
             Assert.That(
-                _field.YardsToAttackingGoal(Systems_FieldModel.OWN_GOAL_LINE_Y),
+                Systems_FieldModel.YardsToAttackingGoal(Systems_FieldModel.OWN_GOAL_LINE_Y),
                 Is.EqualTo(100f).Within(0.05f));
         }
 
         [Test]
         public void ClampToField_PullsAnyPointBackInsideTheBoundary()
         {
-            Vector2 clamped = _field.ClampToField(new Vector2(999f, 999f));
+            Vector2 clamped = Systems_FieldModel.ClampToField(new Vector2(999f, 999f));
 
             Assert.That(clamped.x, Is.LessThanOrEqualTo(Systems_FieldModel.HALF_WIDTH));
             Assert.That(clamped.y, Is.LessThanOrEqualTo(Systems_FieldModel.ATTACKING_BACK_LINE_Y));
 
-            Vector2 clampedLow = _field.ClampToField(new Vector2(-999f, -999f));
+            Vector2 clampedLow = Systems_FieldModel.ClampToField(new Vector2(-999f, -999f));
 
             Assert.That(clampedLow.x, Is.GreaterThanOrEqualTo(-Systems_FieldModel.HALF_WIDTH));
             Assert.That(clampedLow.y, Is.GreaterThanOrEqualTo(Systems_FieldModel.OWN_BACK_LINE_Y));

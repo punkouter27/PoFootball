@@ -66,14 +66,6 @@ namespace PoFootball.Models
 
     public static class Systems_FoulTypeExtensions
     {
-        /// <summary>Fouls that kill the play before the snap.</summary>
-        public static bool IsDeadBall(this Systems_FoulType foul)
-        {
-            return foul == Systems_FoulType.FalseStart
-                || foul == Systems_FoulType.Offside
-                || foul == Systems_FoulType.DelayOfGame;
-        }
-
         /// <summary>Yards the foul is worth before half-the-distance is applied.</summary>
         public static float Yards(this Systems_FoulType foul)
         {

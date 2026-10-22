@@ -27,11 +27,6 @@ namespace PoFootball.Systems
         private IDisposable _resolvedSubscription;
 
         /// <summary>
-        /// Drives already credited, so a drive is counted once when it starts
-        /// rather than once per play. Systems_GameModel.DriveIndex only ever
-        /// increases, so comparing against the last one seen is enough.
-        /// </summary>
-        /// <summary>
         /// Drives already credited. Seeded to a value DriveIndex can never take so
         /// the opening drive is counted like any other — at -1 against an opening
         /// DriveIndex of 0 this worked by luck, and lost the opening drive entirely
@@ -95,7 +90,7 @@ namespace PoFootball.Systems
             // not, and with three punts in a measured game that is visible.
             // NOR IS A KICKOFF, A TRY, OR A DOWN THE OFFICIALS WIPED OUT (revision 14).
             // A penalty that replaced the play leaves no play to book.
-            if (IsKick(message.Call)
+            if (message.Call.IsKick()
                 || message.Kind == Systems_PlayKind.Kickoff
                 || message.Kind.IsTry()
                 || message.PlayResult == Systems_DownResult.Penalty)
@@ -127,11 +122,6 @@ namespace PoFootball.Systems
             CountDrive(message);
 
             RecordResult(message, offense, defense);
-        }
-
-        private static bool IsKick(Systems_PlayCall call)
-        {
-            return call == Systems_PlayCall.Punt || call == Systems_PlayCall.FieldGoal;
         }
 
         /// <summary>

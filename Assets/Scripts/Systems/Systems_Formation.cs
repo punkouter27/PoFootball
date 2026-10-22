@@ -37,6 +37,26 @@ namespace PoFootball.Systems
 
         public const int HALFBACK_SLOT_INDEX = Systems_FormationBook.HALFBACK_SLOT_INDEX;
 
+        /// <summary>
+        /// The slot a handoff call goes to, or -1 when the call is not a handoff.
+        /// The one mapping both sides of a handoff read: Systems_BallSystem.TryHandoff
+        /// completes it, and the quarterback heuristic steers toward the same back.
+        /// </summary>
+        public static int HandoffSlotOf(Systems_PlayCall call)
+        {
+            if (call == Systems_PlayCall.HandoffFullback)
+            {
+                return FULLBACK_SLOT_INDEX;
+            }
+
+            if (call == Systems_PlayCall.HandoffHalfback)
+            {
+                return HALFBACK_SLOT_INDEX;
+            }
+
+            return -1;
+        }
+
         /// <summary>Twenty-two: eleven a side, in every formation.</summary>
         public static int SlotCount => Systems_FormationBook.SLOTS_PER_SIDE * 2;
 

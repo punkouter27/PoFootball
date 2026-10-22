@@ -228,19 +228,6 @@ namespace PoFootball.Rewards
                 case Systems_PlayOutcome.Incompletion:
                     return -Systems_SimConstants.INCOMPLETION_PENALTY;
 
-                // The largest swing in the game short of a score. A throw no longer
-                // earns dense yardage in the air (Reward_Progress.CountsAsProgress),
-                // so a pick costs exactly this and nothing offsets it.
-                case Systems_PlayOutcome.Interception:
-                    return -Systems_SimConstants.INTERCEPTION_REWARD;
-
-                // Priced exactly like an interception, because it is one: the
-                // defense takes over at the spot. Without this the switch fell
-                // through to `default` and a lost fumble cost the offense NOTHING,
-                // which would teach a carrier that running into a crowd is free.
-                case Systems_PlayOutcome.FumbleLost:
-                    return -Systems_SimConstants.INTERCEPTION_REWARD;
-
                 // Flat, and deliberately not stacked with the yardage term the way
                 // Tackle is. A safety is already the worst thing on this list; how
                 // far backwards the carrier went to get there does not make it
@@ -260,15 +247,6 @@ namespace PoFootball.Rewards
                 // takes over seven yards further back than the line of scrimmage.
                 case Systems_PlayOutcome.FieldGoalMissed:
                     return -Systems_SimConstants.FIELD_GOAL_MISS_PENALTY;
-
-                // Nearly free, and deliberately so. Punting is the CORRECT call on
-                // most fourth downs, and pricing it like a turnover would teach the
-                // offense to avoid the one decision that is usually right. The small
-                // cost that remains is the cost of not having converted — enough
-                // that a policy still prefers a first down to a punt from the same
-                // spot, and not so much that it never kicks.
-                case Systems_PlayOutcome.Punt:
-                    return -Systems_SimConstants.PUNT_PENALTY;
 
                 default:
                     return completionBonus;

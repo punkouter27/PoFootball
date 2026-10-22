@@ -30,13 +30,6 @@ namespace PoFootball.Systems
     /// </summary>
     public sealed class Systems_BallSystem
     {
-        /// <summary>
-        /// The length a throw at nobody is treated as having, for its error. Only
-        /// reachable with no eligible receiver on the field, which no formation
-        /// here lines up.
-        /// </summary>
-        private const float UNTARGETED_THROW_METRES = 15f;
-
         /// <summary>Share of its speed a muffed or batted ball keeps as it hits the turf.</summary>
         private const float DEFLECTED_SPEED_RETAINED = 0.3f;
 
@@ -128,15 +121,11 @@ namespace PoFootball.Systems
                 return;
             }
 
-            if (_play.Call != Systems_PlayCall.HandoffFullback
-                && _play.Call != Systems_PlayCall.HandoffHalfback)
+            int targetSlot = Systems_Formation.HandoffSlotOf(_play.Call);
+            if (targetSlot < 0)
             {
                 return;
             }
-
-            int targetSlot = _play.Call == Systems_PlayCall.HandoffFullback
-                ? Systems_Formation.FULLBACK_SLOT_INDEX
-                : Systems_Formation.HALFBACK_SLOT_INDEX;
 
             Systems_IPlayerHandle target = _registry.Get(targetSlot);
             if (target == null)
@@ -209,7 +198,7 @@ namespace PoFootball.Systems
 
             // A pass that sails out of the field of play is incomplete; it cannot
             // score and nobody can catch it.
-            if (IsOutsideSidelines(_ball.Position.x)
+            if (Systems_FieldModel.IsOutsideSidelines(_ball.Position.x)
                 || _ball.Position.y >= Systems_FieldModel.ATTACKING_BACK_LINE_Y
                 || _ball.Position.y <= Systems_FieldModel.OWN_BACK_LINE_Y)
             {
@@ -274,7 +263,7 @@ namespace PoFootball.Systems
                 if (candidate == null
                     || candidate.Side != Systems_TeamSide.Offense
                     || candidate.Id == _ball.ThrowerId
-                    || !IsEligibleReceiver(candidate.Role))
+                    || !IsPassTargetRole(candidate.Role))
                 {
                     continue;
                 }
@@ -592,7 +581,7 @@ namespace PoFootball.Systems
                 if (candidate == null
                     || candidate.Id == thrower.Id
                     || candidate.Side != thrower.Side
-                    || !IsEligibleReceiver(candidate.Role))
+                    || !IsPassTargetRole(candidate.Role))
                 {
                     continue;
                 }
@@ -680,7 +669,7 @@ namespace PoFootball.Systems
         /// the thrower check rather than here, so a trick play that hands off first
         /// could still find it.
         /// </summary>
-        private static bool IsEligibleReceiver(Systems_PlayerRole role)
+        private static bool IsPassTargetRole(Systems_PlayerRole role)
         {
             return role != Systems_PlayerRole.OffensiveLine;
         }
@@ -803,7 +792,7 @@ namespace PoFootball.Systems
         /// </summary>
         public bool IsKickoffNotYetKicked()
         {
-            return _play.Kind == Systems_PlayKind.Kickoff && !_play.WasKicked;
+            return _play.IsKickoffPending;
         }
 
         private Systems_BallEvent UpdateLateral()
@@ -812,7 +801,7 @@ namespace PoFootball.Systems
 
             Vector2 position = _ball.Position;
 
-            if (IsOutsideSidelines(position.x)
+            if (Systems_FieldModel.IsOutsideSidelines(position.x)
                 || position.y >= Systems_FieldModel.ATTACKING_BACK_LINE_Y
                 || position.y <= Systems_FieldModel.OWN_BACK_LINE_Y)
             {
@@ -957,7 +946,7 @@ namespace PoFootball.Systems
 
             Vector2 position = _ball.Position;
 
-            if (IsOutsideSidelines(position.x))
+            if (Systems_FieldModel.IsOutsideSidelines(position.x))
             {
                 return KickOutOfBounds(position);
             }
@@ -1011,7 +1000,7 @@ namespace PoFootball.Systems
                     Systems_TeamSide.Offense);
             }
 
-            if (_ball.Height <= 0f || IsOutsideSidelines(position.x))
+            if (_ball.Height <= 0f || Systems_FieldModel.IsOutsideSidelines(position.x))
             {
                 return new Systems_BallEvent(
                     Systems_PlayOutcome.FieldGoalMissed, position, Systems_TeamSide.Offense);
@@ -1072,7 +1061,7 @@ namespace PoFootball.Systems
             if (_play.Kind == Systems_PlayKind.Punt)
             {
                 return new Systems_BallEvent(
-                    Systems_PlayOutcome.Punt, ClampToField(_ball.Position), Systems_TeamSide.Defense);
+                    Systems_PlayOutcome.Punt, Systems_FieldModel.ClampToField(_ball.Position), Systems_TeamSide.Defense);
             }
 
             if (KickTravelledYards() >= Systems_SimConstants.KICKOFF_YARDS_BEFORE_RECOVERY)
@@ -1119,18 +1108,18 @@ namespace PoFootball.Systems
                 }
 
                 return new Systems_BallEvent(
-                    Systems_PlayOutcome.Kickoff, ClampToField(position), Systems_TeamSide.Defense);
+                    Systems_PlayOutcome.Kickoff, Systems_FieldModel.ClampToField(position), Systems_TeamSide.Defense);
             }
 
             if (_play.Kind.IsPlaceKick())
             {
                 return new Systems_BallEvent(
                     _play.KickWasBlocked ? Systems_PlayOutcome.KickBlocked : Systems_PlayOutcome.FieldGoalMissed,
-                    ClampToField(position), Systems_TeamSide.Defense);
+                    Systems_FieldModel.ClampToField(position), Systems_TeamSide.Defense);
             }
 
             return new Systems_BallEvent(
-                Systems_PlayOutcome.Punt, ClampToField(position), Systems_TeamSide.Defense);
+                Systems_PlayOutcome.Punt, Systems_FieldModel.ClampToField(position), Systems_TeamSide.Defense);
         }
 
         private static Systems_BallEvent Touchback(Vector2 position)
@@ -1191,7 +1180,7 @@ namespace PoFootball.Systems
             _ball.AdvanceLoose(Time.fixedDeltaTime);
             Vector2 position = _ball.Position;
 
-            if (IsOutsideSidelines(position.x))
+            if (Systems_FieldModel.IsOutsideSidelines(position.x))
             {
                 return LooseOutOfBounds(position);
             }
@@ -1358,7 +1347,7 @@ namespace PoFootball.Systems
             }
 
             return new Systems_BallEvent(
-                Systems_PlayOutcome.OutOfBounds, ClampToField(position), _ball.PossessingSide);
+                Systems_PlayOutcome.OutOfBounds, Systems_FieldModel.ClampToField(position), _ball.PossessingSide);
         }
 
         /// <summary>
@@ -1445,19 +1434,6 @@ namespace PoFootball.Systems
         public static Vector2 AttackDirectionOf(Systems_TeamSide side)
         {
             return side == Systems_TeamSide.Offense ? Vector2.up : Vector2.down;
-        }
-
-        private static bool IsOutsideSidelines(float x)
-        {
-            return x < -Systems_FieldModel.HALF_WIDTH || x > Systems_FieldModel.HALF_WIDTH;
-        }
-
-        private static Vector2 ClampToField(Vector2 position)
-        {
-            return new Vector2(
-                Mathf.Clamp(position.x, -Systems_FieldModel.HALF_WIDTH, Systems_FieldModel.HALF_WIDTH),
-                Mathf.Clamp(
-                    position.y, Systems_FieldModel.OWN_BACK_LINE_Y, Systems_FieldModel.ATTACKING_BACK_LINE_Y));
         }
 
         /// <summary>Nearest player of either side within <paramref name="radius"/>, skipping one slot.</summary>

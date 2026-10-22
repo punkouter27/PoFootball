@@ -9,6 +9,8 @@
         "MessagePipe.VContainer",
         "UniTask",
         "Unity.Mathematics",
+        "Unity.Burst",
+        "Unity.Collections",
         "Unity.InputSystem",
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.RenderPipelines.Universal.2D.Runtime",

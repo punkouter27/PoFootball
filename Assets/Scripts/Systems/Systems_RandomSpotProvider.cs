@@ -138,7 +138,7 @@ namespace PoFootball.Systems
             {
                 case Systems_PlayKind.Kickoff:
                     return new Systems_PlaySituation(
-                        OwnYardLine(Systems_GameRules.KICKOFF_YARD_LINE),
+                        Systems_FieldModel.OwnYardLineToY(Systems_GameRules.KICKOFF_YARD_LINE),
                         1, Systems_GameRules.YARDS_TO_GAIN,
                         kind, onsideDraw < ONSIDE_SHARE);
 
@@ -180,11 +180,6 @@ namespace PoFootball.Systems
                 - (opponentYardLine * Systems_FieldModel.YARD);
 
             return new Systems_PlaySituation(lineOfScrimmageY, 1, opponentYardLine, kind, false);
-        }
-
-        private static float OwnYardLine(float yardLine)
-        {
-            return Systems_FieldModel.OWN_GOAL_LINE_Y + (yardLine * Systems_FieldModel.YARD);
         }
     }
 }

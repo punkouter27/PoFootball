@@ -46,6 +46,29 @@ namespace PoFootball.Systems
             return _players[slotIndex];
         }
 
+        /// <summary>
+        /// The player holding the ball while the play is live, or null — including
+        /// after the whistle, when the ball is still attached to whoever was tackled
+        /// and he is only coasting. Shared by the views that frame and label him.
+        /// </summary>
+        public Systems_IPlayerHandle LiveCarrier(Systems_PlayModel play, Systems_BallModel ball)
+        {
+            if (play == null || ball == null
+                || play.Phase != Systems_PlayPhase.Live || !ball.IsHeld)
+            {
+                return null;
+            }
+
+            int carrierId = ball.CarrierId;
+
+            if (carrierId < 0 || carrierId >= CAPACITY)
+            {
+                return null;
+            }
+
+            return Get(carrierId);
+        }
+
         public Systems_IPlayerHandle FindById(int id)
         {
             for (int slotIndex = 0; slotIndex < CAPACITY; slotIndex++)

@@ -134,6 +134,12 @@ namespace PoFootball.Models
 
         public bool WasKicked { get; private set; }
 
+        /// <summary>A kicking snap whose kick has not left the foot yet.</summary>
+        public bool IsKickPending => Kind.IsKick() && !WasKicked;
+
+        /// <summary>A kickoff not yet kicked: the one kick that may not be pitched first.</summary>
+        public bool IsKickoffPending => Kind == Systems_PlayKind.Kickoff && !WasKicked;
+
         /// <summary>
         /// Whether the receiving team has touched the kick. A punt the receivers
         /// never touched and the kicking team downs is the receivers' ball; one they
@@ -320,7 +326,7 @@ namespace PoFootball.Models
                 return;
             }
 
-            bool isKick = call == Systems_PlayCall.Punt || call == Systems_PlayCall.FieldGoal;
+            bool isKick = call.IsKick();
 
             if (Phase == Systems_PlayPhase.PreSnap)
             {

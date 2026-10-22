@@ -90,6 +90,21 @@ namespace PoFootball.Systems
                     .As<Systems_IIntentSink, Systems_IIntentSource>();
             }
 
+            // What the two coordinators were choosing between, for the broadcast's
+            // call sheet. The same question as the intent sink and so the same
+            // switch — and here it also decides whether a trained brain's policy is
+            // sampled at all (Agent_PolicySampler), which a trainer must never pay.
+            if (presentationBudget.EffectsEnabled)
+            {
+                builder.Register<Systems_CallSheet>(Lifetime.Singleton)
+                    .As<Systems_ICallSheetSink, Systems_ICallSheetSource>();
+            }
+            else
+            {
+                builder.Register<Systems_NullCallSheet>(Lifetime.Singleton)
+                    .As<Systems_ICallSheetSink, Systems_ICallSheetSource>();
+            }
+
             // Off-ball collisions, for the puff and the thud. The same question as
             // the intent sink above and so the same switch: a trainer is not
             // listening, and gets the binding that publishes nothing.
@@ -229,18 +244,24 @@ namespace PoFootball.Systems
 
             builder.RegisterEntryPoint<Systems_StatsSystem>();
 
+            // The broadcast's win probability, one point per resolved down. An
+            // entry point so it is built and subscribed before the opening kickoff
+            // even though nothing resolves it by type until the ribbon does.
+            builder.Register<Systems_WinProbabilityModel>(Lifetime.Singleton);
+            builder.RegisterEntryPoint<Systems_WinProbabilitySystem>();
+
+            // The stadium city and its sky — presentation only, nothing a policy
+            // observes (Systems_WeatherSystem). Systems_StadiumRigView and
+            // Systems_WeatherView read the model; the view starts the system.
+            builder.Register<Systems_WeatherModel>(Lifetime.Singleton);
+            builder.Register<Systems_WeatherSystem>(Lifetime.Singleton);
+
             // The viewer's playback speed and pause. Game only: a trainer's speed is time_scale in
             // the config, and nothing in training may touch Time.timeScale. The
             // container disposes it on unload, which is what resets the scale.
             builder.Register<Systems_SimSpeedSystem>(Lifetime.Singleton);
         }
 
-        /// <summary>
-        /// Injects every scene MonoBehaviour this assembly is not allowed to name:
-        /// the agents, the views, and the training telemetry sink. One scan, two
-        /// marker interfaces — Systems_IInjectableView derives from
-        /// Systems_IInjectableBehaviour, so views are covered by the second test.
-        /// </summary>
         /// <summary>
         /// The seed the line-of-scrimmage RNG starts from.
         ///
@@ -282,6 +303,12 @@ namespace PoFootball.Systems
             return (uint)System.DateTime.Now.Ticks;
         }
 
+        /// <summary>
+        /// Injects every scene MonoBehaviour this assembly is not allowed to name:
+        /// the agents, the views, and the training telemetry sink. One scan, two
+        /// marker interfaces — Systems_IInjectableView derives from
+        /// Systems_IInjectableBehaviour, so views are covered by the second test.
+        /// </summary>
         private void InjectSceneBehaviours(IObjectResolver container)
         {
             MonoBehaviour[] behaviours = FindObjectsByType<MonoBehaviour>(

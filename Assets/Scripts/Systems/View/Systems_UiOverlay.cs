@@ -75,12 +75,6 @@ namespace PoFootball.Views
             return this;
         }
 
-        public Systems_UiOverlay Padded(int amount)
-        {
-            Systems_UiTheme.SetPadding(_content, amount);
-            return this;
-        }
-
         public void Show()
         {
             CancelSchedules();

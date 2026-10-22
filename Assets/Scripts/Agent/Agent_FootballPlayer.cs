@@ -118,6 +118,14 @@ namespace PoFootball.Agents
         private bool _isCarrier;
         private float _previousBallY;
         private float _previousBallDistance;
+
+        /// <summary>
+        /// Last tick's Reward_Role.InterceptPotential, defenders only. Re-seeded
+        /// with the other two baselines and moved every tick whether or not the
+        /// term was paid, so nothing earned across a pass's flight or a change of
+        /// possession is paid on the far side of it.
+        /// </summary>
+        private float _previousInterceptPotential;
         private int _lastSeenEpisode = -1;
         /// <summary>
         /// Index of the play-call branch in the quarterback's discrete action space.
@@ -229,6 +237,17 @@ namespace PoFootball.Agents
 
         /// <summary>The play <see cref="_plannedCall"/> was drawn for.</summary>
         private int _plannedCallEpisode = -1;
+
+        /// <summary>
+        /// Where the quarterback reports what it was choosing between, for the
+        /// broadcast's call sheet. The no-op binding in training.
+        /// </summary>
+        private Systems_ICallSheetSink _callSheet;
+
+        /// <summary>The play the call sheet was last reported for.</summary>
+        private int _callSheetEpisode = -1;
+
+        private readonly float[] _callChances = new float[Systems_CallSheet.CALL_SLOTS];
 
         private readonly int[] _callCounts =
             new int[Sensor_FootballState.PLAY_CALL_BRANCH_SIZE];
@@ -344,8 +363,10 @@ namespace PoFootball.Agents
             Systems_FormationSelection formations,
             Systems_Roster roster,
             Systems_SimHealthModel health,
-            Systems_PenaltySystem penalties)
+            Systems_PenaltySystem penalties,
+            Systems_ICallSheetSink callSheet)
         {
+            _callSheet = callSheet;
             _health = health;
             _roster = roster;
             _penalties = penalties;
@@ -457,7 +478,8 @@ namespace PoFootball.Agents
         {
             if (_isDefenseCaptain && Coordinator == null && _play != null)
             {
-                Coordinator = Agent_DefensiveCoordinator.Create(transform, _play, Formations, _field);
+                Coordinator = Agent_DefensiveCoordinator.Create(
+                    transform, _play, Formations, _callSheet);
             }
         }
 
@@ -615,8 +637,7 @@ namespace PoFootball.Agents
             bool hasPlay = _play != null;
             bool hasBall = _ball != null;
 
-            Sensor_FootballState.Collect(
-                sensor,
+            Sensor_FootballState.Write(
                 _observationBuffer,
                 _field,
                 _role,
@@ -639,6 +660,8 @@ namespace PoFootball.Agents
                 PossessionRelativeToMe(),
                 hasPlay ? _play.Kind : Systems_PlayKind.Scrimmage,
                 hasPlay && _play.Phase == Systems_PlayPhase.PreSnap);
+
+            sensor.AddObservation(_observationBuffer);
         }
 
         /// <summary>
@@ -767,7 +790,7 @@ namespace PoFootball.Agents
         {
             return _play.Phase == Systems_PlayPhase.Live
                 && !_play.CallIsLatched
-                && (_play.Kind == Systems_PlayKind.Scrimmage || _play.Kind == Systems_PlayKind.TwoPoint)
+                && _play.Kind.HasLiveCall()
                 && _play.PhysicsTick + (2 * Systems_SimConstants.DECISION_PERIOD)
                     > Systems_SimConstants.DROPBACK_TICKS;
         }
@@ -819,9 +842,7 @@ namespace PoFootball.Agents
         /// </summary>
         private bool IsInFieldGoalRange()
         {
-            float yardsToGoalLine =
-                (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - _play.LineOfScrimmageY)
-                / Systems_FieldModel.YARD;
+            float yardsToGoalLine = Systems_FieldModel.YardsToAttackingGoal(_play.LineOfScrimmageY);
 
             return yardsToGoalLine + Systems_GameRules.FIELD_GOAL_SNAP_YARDS
                 <= Systems_GameRules.FIELD_GOAL_MAX_YARDS;
@@ -844,6 +865,7 @@ namespace PoFootball.Agents
                 if (_hasQuarterbackActions)
                 {
                     HandlePreSnapCall(actions);
+                    ReportCallSheet();
                 }
 
 
@@ -932,6 +954,52 @@ namespace PoFootball.Agents
                     _hasQuarterbackActions,
                     throwArmed,
                     _play.PhysicsTick));
+        }
+
+        /// <summary>
+        /// What the quarterback is choosing between this snap, for the broadcast's
+        /// call sheet: once a play, after the kick window has closed so a kick is
+        /// already off the table, and only on a snap with a live call.
+        ///
+        /// The scripted quarterback's chances are Agent_PlayCaller's own, worked
+        /// out exactly from the same inputs ChooseCall hands it — including
+        /// IsDeepShotPlay, so a deep-shot snap shows the deep pass. A trained
+        /// quarterback's are not sampled: its observation is the full 50-float
+        /// state plus two ray sensors, which a second worker would have to rebuild
+        /// by hand, so the sheet shows its call once it latches and says so.
+        /// </summary>
+        private void ReportCallSheet()
+        {
+            if (_callSheet == null
+                || !_callSheet.Available
+                || _callSheetEpisode == _play.EpisodeIndex
+                || _play.PreSnapTick < Systems_SimConstants.KICK_CALL_WINDOW_TICKS
+                || !_play.Kind.HasLiveCall())
+            {
+                return;
+            }
+
+            _callSheetEpisode = _play.EpisodeIndex;
+
+            BehaviorParameters behaviorParameters = GetComponent<BehaviorParameters>();
+            bool scripted = behaviorParameters == null
+                || behaviorParameters.Model == null
+                || behaviorParameters.IsInHeuristicMode();
+
+            if (!scripted)
+            {
+                _callSheet.ReportOffense(_play.EpisodeIndex, null, Systems_CallSource.Policy);
+                return;
+            }
+
+            Agent_PlayCaller.Chances(
+                _play.Down,
+                _play.YardsToGo,
+                Systems_FieldModel.YardsToAttackingGoal(Position.y),
+                IsDeepShotPlay(),
+                _callChances);
+
+            _callSheet.ReportOffense(_play.EpisodeIndex, _callChances, Systems_CallSource.Scripted);
         }
 
         /// <summary>
@@ -1036,17 +1104,6 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
-        /// Load comes from APPLIED FORCE, never from the action vector. A player
-        /// braced against a block is a near-zero action at near-maximum force, and
-        /// reading the action would score that as resting (CLAUDE.md section 2).
-        ///
-        /// Each term is divided by this role's own maximum, so load is
-        /// dimensionless and lands in [0, 3]. The previous form summed newtons and
-        /// newton-metres directly, which is not a quantity, and the constants it
-        /// was scaled by could not accumulate against the recovery rate at all —
-        /// fatigue was pinned at zero for the whole of base01 through base03.
-        /// </summary>
-        /// <summary>
         /// One tick of the control-effort KPIs. Every term is dimensionless and
         /// already in a bounded range, so the episode mean is directly comparable
         /// between a lineman and a receiver despite their very different forces.
@@ -1138,6 +1195,17 @@ namespace PoFootball.Agents
             _driveSaturatedTicks = 0;
         }
 
+        /// <summary>
+        /// Load comes from APPLIED FORCE, never from the action vector. A player
+        /// braced against a block is a near-zero action at near-maximum force, and
+        /// reading the action would score that as resting (CLAUDE.md section 2).
+        ///
+        /// Each term is divided by this role's own maximum, so load is
+        /// dimensionless and lands in [0, 3]. The previous form summed newtons and
+        /// newton-metres directly, which is not a quantity, and the constants it
+        /// was scaled by could not accumulate against the recovery rate at all —
+        /// fatigue was pinned at zero for the whole of base01 through base03.
+        /// </summary>
         private void AccumulateFatigue(float driveForce, float steerTorque)
         {
             // The third term is what the first two could never see. They are the
@@ -1200,6 +1268,9 @@ namespace PoFootball.Agents
             float ballY = _play.BallY;
             Vector2 ballPosition = _ball == null ? Position : _ball.Position;
             float ballDistance = Vector2.Distance(Position, ballPosition);
+            float interceptPotential = _side == Systems_TeamSide.Defense
+                ? CurrentInterceptPotential(ballPosition)
+                : 0f;
 
             int epoch = _ball == null ? 0 : _ball.PossessionEpoch;
 
@@ -1212,6 +1283,7 @@ namespace PoFootball.Agents
                 _lastPossessionEpoch = epoch;
                 _previousBallY = ballY;
                 _previousBallDistance = ballDistance;
+                _previousInterceptPotential = interceptPotential;
                 return;
             }
 
@@ -1230,9 +1302,31 @@ namespace PoFootball.Agents
             }
 
             AddReward(Reward_Progress.PerTick(_side, yardsDelta));
-            AddReward(RoleReward(ballPosition, ballDistance, countsAsProgress));
+            AddReward(RoleReward(ballPosition, ballDistance, interceptPotential, countsAsProgress));
 
             _previousBallDistance = ballDistance;
+            _previousInterceptPotential = interceptPotential;
+        }
+
+        /// <summary>
+        /// This defender's Reward_Role.InterceptPotential against the ball: the
+        /// carrier's body and velocity while it is held (the ball model reports
+        /// zero velocity while Held), the ball's own while it is loose. At this
+        /// player's trait-adjusted top speed — the speed InterceptOf steers the
+        /// scripted defender at — so the reward and the heuristic agree on what a
+        /// good angle is.
+        /// </summary>
+        private float CurrentInterceptPotential(Vector2 ballPosition)
+        {
+            Systems_IPlayerHandle carrier = CurrentCarrier();
+
+            Vector2 targetPosition = carrier == null ? ballPosition : carrier.Position;
+            Vector2 targetVelocity = carrier == null
+                ? (_ball == null ? Vector2.zero : _ball.Velocity)
+                : carrier.Velocity;
+
+            return Reward_Role.InterceptPotential(
+                Reward_Role.InterceptSeconds(Position, _topSpeed, targetPosition, targetVelocity));
         }
 
         /// <summary>
@@ -1241,7 +1335,8 @@ namespace PoFootball.Agents
         /// guard who held his block and a guard who wandered off are the same
         /// gradient (see Reward_Role).
         /// </summary>
-        private float RoleReward(Vector2 ballPosition, float ballDistance, bool ballIsGrounded)
+        private float RoleReward(
+            Vector2 ballPosition, float ballDistance, float interceptPotential, bool ballIsGrounded)
         {
             // SINCE REVISION 14 THE BALL CAN BE EITHER SIDE'S. Pursuit is the job of
             // whichever side does not have it; the offense's blocking and route
@@ -1268,8 +1363,14 @@ namespace PoFootball.Agents
                 // does, so pursuit measured against it was noise the size of a
                 // whole play's honest pursuit, uncorrelated with the action. The
                 // caller still moves the baseline, so the catch is not paid either.
+                //
+                // THE ANGLE, NOT THE DISTANCE (football_base24). Closing distance
+                // paid a defender for running at the ball's current spot — pure
+                // pursuit, which arrives where the carrier was and catches nobody
+                // at equal speed. The fall in time-to-intercept pays for the cut
+                // that meets him. See Reward_Role.InterceptPotential.
                 return ballIsGrounded
-                    ? Reward_Role.Pursuit(_previousBallDistance - ballDistance)
+                    ? Reward_Role.InterceptShaping(_previousInterceptPotential, interceptPotential)
                     : 0f;
             }
 
@@ -1704,7 +1805,7 @@ namespace PoFootball.Agents
             // he took the snap at — out of his own end zone if he took it there —
             // and the back meets him there, instead of seven yards deep.
             if (_isCarrier && _hasQuarterbackActions && !_play.CallIsLatched
-                && (_play.Kind == Systems_PlayKind.Scrimmage || _play.Kind == Systems_PlayKind.TwoPoint)
+                && _play.Kind.HasLiveCall()
                 && IsRunCall(PlannedCall()))
             {
                 return new Vector2(
@@ -1823,7 +1924,7 @@ namespace PoFootball.Agents
                         position.x + lateral,
                         -Systems_FieldModel.HALF_WIDTH,
                         Systems_FieldModel.HALF_WIDTH),
-                    GoalLineYOf(_side));
+                    Systems_FieldModel.GoalLineYOf(_side));
             }
 
             // THE BALL IS THE OTHER SIDE'S: chase it. The defense of the snap has its
@@ -1942,25 +2043,13 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
-        /// Whether the quarterback is still a passer rather than a runner: either it
-        /// has not committed to anything yet, or it has called a pass and the throw
-        /// window is still open.
-        ///
-        /// A handoff drops out of here the moment it latches, which is correct — on
-        /// a handoff the quarterback's job is to close on the back, and
-        /// Systems_BallSystem.TryHandoff completes on proximity alone. That closing
-        /// is TargetPoint's mesh branch; until it was written this comment described
-        /// behaviour that did not exist and the quarterback ran at the goal line
-        /// holding the ball instead.
-        /// </summary>
-        /// <summary>
         /// The back this play's call hands off to, or null when the call is not a
         /// handoff, has not latched yet, or the ball has already changed hands.
         ///
-        /// Mirrors Systems_BallSystem.TryHandoff's slot choice exactly. The two
-        /// have to agree — one decides where the quarterback runs, the other decides
-        /// whether arriving there completes the handoff — so if the playbook ever
-        /// grows a third run they both need the same new case.
+        /// The slot comes from Systems_Formation.HandoffSlotOf, which
+        /// Systems_BallSystem.TryHandoff reads too: one decides where the
+        /// quarterback runs, the other whether arriving there completes the handoff,
+        /// so they must never disagree.
         /// </summary>
         private Systems_IPlayerHandle HandoffTarget()
         {
@@ -1981,17 +2070,7 @@ namespace PoFootball.Agents
                 return -1;
             }
 
-            if (_play.Call == Systems_PlayCall.HandoffFullback)
-            {
-                return Systems_Formation.FULLBACK_SLOT_INDEX;
-            }
-
-            if (_play.Call == Systems_PlayCall.HandoffHalfback)
-            {
-                return Systems_Formation.HALFBACK_SLOT_INDEX;
-            }
-
-            return -1;
+            return Systems_Formation.HandoffSlotOf(_play.Call);
         }
 
         /// <summary>
@@ -2015,6 +2094,18 @@ namespace PoFootball.Agents
             return HandoffTargetSlot() == _formationSlotIndex;
         }
 
+        /// <summary>
+        /// Whether the quarterback is still a passer rather than a runner: either it
+        /// has not committed to anything yet, or it has called a pass and the throw
+        /// window is still open.
+        ///
+        /// A handoff drops out of here the moment it latches, which is correct — on
+        /// a handoff the quarterback's job is to close on the back, and
+        /// Systems_BallSystem.TryHandoff completes on proximity alone. That closing
+        /// is TargetPoint's mesh branch; until it was written this comment described
+        /// behaviour that did not exist and the quarterback ran at the goal line
+        /// holding the ball instead.
+        /// </summary>
         private bool IsHoldingThePocket()
         {
             if (!_play.CallIsLatched)
@@ -2287,7 +2378,7 @@ namespace PoFootball.Agents
         {
             // A kick, a kneel, a spike: the quarterback is a kicker or a clock, and
             // throws nothing.
-            if (_play.Kind != Systems_PlayKind.Scrimmage && _play.Kind != Systems_PlayKind.TwoPoint)
+            if (!_play.Kind.HasLiveCall())
             {
                 return;
             }
@@ -2491,25 +2582,6 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
-        /// The heuristic's play call, chosen from down, distance and field position.
-        ///
-        /// WHY THIS READS THE DOWN AT ALL. It used to branch on yards-to-goal alone
-        /// — pass beyond the 25, alternate the two handoffs inside it — and so it
-        /// could never return Punt, FieldGoal or KeepQuarterback. That is not a
-        /// cosmetic gap: with no promoted brain every player falls back to
-        /// Heuristic, so those three calls, and the Punt, FieldGoal,
-        /// TurnoverOnDowns and Safety outcomes downstream of them, were unreachable
-        /// in the only mode the game can currently run. A 40-play sample produced
-        /// nothing but Tackle, Touchdown and Incompletion, and drives never ended in
-        /// anything but a score, which is most of why the scoreline ran away.
-        ///
-        /// EVERY BRANCH HERE MIRRORS WriteDiscreteActionMask. The mask is the
-        /// authority on what is legal — Punt on fourth down, FieldGoal on fourth
-        /// down and in range — and a heuristic that proposed a masked action would
-        /// have it silently overridden, which reads as the call being ignored. The
-        /// two are deliberately expressed the same way round so they stay in step.
-        /// </summary>
-        /// <summary>
         /// The heuristic's own RNG, seeded once from <see cref="Systems_EpisodeSeed"/>.
         ///
         /// WHY THE HEURISTIC IS STOCHASTIC AT ALL. Everything under it is
@@ -2533,6 +2605,12 @@ namespace PoFootball.Agents
         /// path that runs every decision step.
         /// </summary>
         private Unity.Mathematics.Random _heuristicRng;
+
+        /// <summary>
+        /// <see cref="NextHeuristicUnit"/> as a delegate, built once: passing the
+        /// method group would allocate a new Func on every snap.
+        /// </summary>
+        private System.Func<float> _nextHeuristicUnit;
 
         private bool _heuristicRngReady;
 
@@ -2569,20 +2647,12 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
-        /// Delegates to <see cref="Agent_PlayCaller"/>, which owns the judgement.
-        /// This method's whole job is turning agent state into the four numbers it
-        /// takes, and handing over the seeded draw so the policy stays reproducible
-        /// without owning an RNG of its own.
-        /// </summary>
-        /// <summary>
         /// The pre-snap kick-or-go, from <see cref="Agent_PlayCaller.ChooseKick"/>.
         /// None means "go for it".
         /// </summary>
         private Systems_PlayCall ChooseKickCall()
         {
-            float yardsToGoal =
-                (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - _play.LineOfScrimmageY)
-                / Systems_FieldModel.YARD;
+            float yardsToGoal = Systems_FieldModel.YardsToAttackingGoal(_play.LineOfScrimmageY);
 
             return Agent_PlayCaller.ChooseKick(
                 _play.Down, _play.YardsToGo, yardsToGoal, IsInFieldGoalRange());
@@ -2611,18 +2681,24 @@ namespace PoFootball.Agents
                 || call == Systems_PlayCall.KeepQuarterback;
         }
 
+        /// <summary>
+        /// Delegates to <see cref="Agent_PlayCaller"/>, which owns the judgement.
+        /// This method's whole job is turning agent state into the four numbers it
+        /// takes, and handing over the seeded draw so the policy stays reproducible
+        /// without owning an RNG of its own.
+        /// </summary>
         private Systems_PlayCall ChooseCall()
         {
-            float yardsToGoal = _field == null
-                ? 50f
-                : _field.YardsToAttackingGoal(Position.y);
+            float yardsToGoal = Systems_FieldModel.YardsToAttackingGoal(Position.y);
+
+            _nextHeuristicUnit ??= NextHeuristicUnit;
 
             Systems_PlayCall call = Agent_PlayCaller.Choose(
                 _play.Down,
                 _play.YardsToGo,
                 yardsToGoal,
                 IsInFieldGoalRange(),
-                NextHeuristicUnit);
+                _nextHeuristicUnit);
 
             // The deep shot is a call of its own since revision 14. Made here, on
             // the same plays IsDeepShotPlay always picked, so the scripted offense
@@ -2633,24 +2709,6 @@ namespace PoFootball.Agents
                 : call;
         }
 
-        /// <summary>
-        /// Roles that can catch a pass. Systems_RoleTable has no such predicate and
-        /// this is the only caller, so it lives here rather than widening a model
-        /// type for one heuristic.
-        /// </summary>
-        private static bool IsEligibleReceiver(Systems_PlayerRole role)
-        {
-            return role == Systems_PlayerRole.WideReceiver
-                || role == Systems_PlayerRole.TightEnd
-                || role == Systems_PlayerRole.RunningBack
-                || role == Systems_PlayerRole.Fullback;
-        }
-
-        /// <summary>
-        /// The receiver with the most room — furthest from its nearest defender,
-        /// and downfield of the throw. Nothing clever, but it means a completion is
-        /// a reward for the routes having spread rather than a coin flip.
-        /// </summary>
         /// <summary>
         /// Whether this play is one of the scripted deep shots.
         ///
@@ -2703,26 +2761,13 @@ namespace PoFootball.Agents
                 if (candidate == null
                     || candidate.Side != Systems_TeamSide.Offense
                     || candidate.Id == Id
-                    || !IsEligibleReceiver(candidate.Role)
+                    || !candidate.Role.IsEligibleReceiver()
                     || candidate.Position.y < depthGate)
                 {
                     continue;
                 }
 
-                float room = float.MaxValue;
-
-                for (int other = 0; other < Systems_PlayerRegistry.CAPACITY; other++)
-                {
-                    Systems_IPlayerHandle defender = _registry.Get(other);
-
-                    if (defender == null || defender.Side != Systems_TeamSide.Defense)
-                    {
-                        continue;
-                    }
-
-                    room = Mathf.Min(
-                        room, (defender.Position - candidate.Position).sqrMagnitude);
-                }
+                float room = RoomSquared(candidate.Position);
 
                 if (room < roomGate)
                 {
@@ -2778,26 +2823,13 @@ namespace PoFootball.Agents
                 if (candidate == null
                     || candidate.Side != Systems_TeamSide.Offense
                     || candidate.Id == Id
-                    || !IsEligibleReceiver(candidate.Role)
+                    || !candidate.Role.IsEligibleReceiver()
                     || candidate.Position.y <= Position.y)
                 {
                     continue;
                 }
 
-                float room = float.MaxValue;
-
-                for (int other = 0; other < Systems_PlayerRegistry.CAPACITY; other++)
-                {
-                    Systems_IPlayerHandle defender = _registry.Get(other);
-
-                    if (defender == null || defender.Side != Systems_TeamSide.Defense)
-                    {
-                        continue;
-                    }
-
-                    room = Mathf.Min(
-                        room, (defender.Position - candidate.Position).sqrMagnitude);
-                }
+                float room = RoomSquared(candidate.Position);
 
                 if (room < threshold)
                 {
@@ -2815,6 +2847,11 @@ namespace PoFootball.Agents
             return chosen ?? best;
         }
 
+        /// <summary>
+        /// The receiver with the most room — furthest from its nearest defender,
+        /// and downfield of the throw. Nothing clever, but it means a completion is
+        /// a reward for the routes having spread rather than a coin flip.
+        /// </summary>
         private Systems_IPlayerHandle MostOpenReceiver()
         {
             if (_registry == null)
@@ -2832,26 +2869,13 @@ namespace PoFootball.Agents
                 if (candidate == null
                     || candidate.Side != Systems_TeamSide.Offense
                     || candidate.Id == Id
-                    || !IsEligibleReceiver(candidate.Role)
+                    || !candidate.Role.IsEligibleReceiver()
                     || candidate.Position.y <= Position.y)
                 {
                     continue;
                 }
 
-                float room = float.MaxValue;
-
-                for (int other = 0; other < Systems_PlayerRegistry.CAPACITY; other++)
-                {
-                    Systems_IPlayerHandle defender = _registry.Get(other);
-
-                    if (defender == null || defender.Side != Systems_TeamSide.Defense)
-                    {
-                        continue;
-                    }
-
-                    room = Mathf.Min(
-                        room, (defender.Position - candidate.Position).sqrMagnitude);
-                }
+                float room = RoomSquared(candidate.Position);
 
                 if (room > bestRoom)
                 {
@@ -2913,17 +2937,6 @@ namespace PoFootball.Agents
         private const float OPTION_PITCH_METRES = 2.5f;
 
         /// <summary>
-        /// The goal line this side attacks: +Y for the offense of the snap, -Y for the
-        /// defense, which only ever carries the ball on a return.
-        /// </summary>
-        private static float GoalLineYOf(Systems_TeamSide side)
-        {
-            return side == Systems_TeamSide.Offense
-                ? Systems_FieldModel.ATTACKING_GOAL_LINE_Y
-                : Systems_FieldModel.OWN_GOAL_LINE_Y;
-        }
-
-        /// <summary>
         /// The quarterback's x in the pocket — where he stands, unless the rush is on
         /// him late in the down, when he breaks out of the tackle box so that a
         /// throwaway is legal.
@@ -2949,6 +2962,29 @@ namespace PoFootball.Agents
 
             return rusher != null
                 && Vector2.Distance(rusher.Position, Position) < PRESSURE_METRES;
+        }
+
+        /// <summary>
+        /// Squared distance from a point to the nearest defender: the room a
+        /// receiver standing there has. Shared by every read the quarterback makes.
+        /// </summary>
+        private float RoomSquared(Vector2 at)
+        {
+            float room = float.MaxValue;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle defender = _registry.Get(slotIndex);
+
+                if (defender == null || defender.Side != Systems_TeamSide.Defense)
+                {
+                    continue;
+                }
+
+                room = Mathf.Min(room, (defender.Position - at).sqrMagnitude);
+            }
+
+            return room;
         }
 
         /// <summary>Distance from this receiver to the nearest defender, metres.</summary>
@@ -3211,10 +3247,7 @@ namespace PoFootball.Agents
 
             Vector2 landing = _ball.Position + (_ball.Velocity * seconds);
 
-            return new Vector2(
-                Mathf.Clamp(landing.x, -Systems_FieldModel.HALF_WIDTH, Systems_FieldModel.HALF_WIDTH),
-                Mathf.Clamp(
-                    landing.y, Systems_FieldModel.OWN_BACK_LINE_Y, Systems_FieldModel.ATTACKING_BACK_LINE_Y));
+            return Systems_FieldModel.ClampToField(landing);
         }
 
         /// <summary>The safety nearer to where the kick is coming down fields it; the other blocks.</summary>

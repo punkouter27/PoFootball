@@ -298,7 +298,7 @@ namespace PoFootball.Systems
         /// </summary>
         private void TickKick()
         {
-            if (!_play.Kind.IsKick() || _play.WasKicked || !_ball.IsHeld)
+            if (!_play.IsKickPending || !_ball.IsHeld)
             {
                 return;
             }
@@ -381,7 +381,7 @@ namespace PoFootball.Systems
                 return;
             }
 
-            if (_field.IsOutsideSidelines(position.x)
+            if (Systems_FieldModel.IsOutsideSidelines(position.x)
                 || position.y <= Systems_FieldModel.OWN_BACK_LINE_Y
                 || position.y >= Systems_FieldModel.ATTACKING_BACK_LINE_Y)
             {
@@ -413,7 +413,7 @@ namespace PoFootball.Systems
             bool stillLegalToThrow =
                 carrier.Id == Systems_Formation.QUARTERBACK_SLOT_INDEX
                 && (_play.PhysicsTick <= Systems_SimConstants.THROW_WINDOW_TICKS
-                    || (_play.Kind.IsKick() && !_play.WasKicked));
+                    || _play.IsKickPending);
 
             if (TrackCrowd(carrier, stillLegalToThrow))
             {
@@ -435,7 +435,7 @@ namespace PoFootball.Systems
                 // in space, he has given himself up.
                 EndCarrierDown(
                     carrier, position,
-                    IsOpponentNear(carrier) ? Systems_PlayOutcome.Tackle : Systems_PlayOutcome.Downed);
+                    CountOpponentsNear(carrier) > 0 ? Systems_PlayOutcome.Tackle : Systems_PlayOutcome.Downed);
                 return;
             }
 
@@ -458,7 +458,7 @@ namespace PoFootball.Systems
                 // running, he is gone.
                 if (IsGoneForTheGoal(carrier))
                 {
-                    Vector2 goal = new Vector2(position.x, GoalLineYOf(carrier.Side));
+                    Vector2 goal = new Vector2(position.x, Systems_FieldModel.GoalLineYOf(carrier.Side));
                     _play.SetBallY(goal.y);
                     _scorePublisher.Publish(new Systems_ScoreMessage(carrier.Id, _play.NetYards));
                     EndPlay(Systems_PlayOutcome.Touchdown, goal, carrier.Side);
@@ -663,14 +663,16 @@ namespace PoFootball.Systems
         {
             float reach = Systems_SimConstants.REACH_TACKLE_RANGE * 2f;
             float reachSquared = reach * reach;
+            Vector2 carrierPosition = carrier.Position;
+            Systems_TeamSide carrierSide = carrier.Side;
             int count = 0;
 
             for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
             {
                 Systems_IPlayerHandle other = _registry.Get(slotIndex);
 
-                if (other != null && other.Side != carrier.Side
-                    && (other.Position - carrier.Position).sqrMagnitude <= reachSquared)
+                if (other != null && other.Side != carrierSide
+                    && (other.Position - carrierPosition).sqrMagnitude <= reachSquared)
                 {
                     count++;
                 }
@@ -683,17 +685,19 @@ namespace PoFootball.Systems
         {
             int nearest = -1;
             float nearestSquared = float.MaxValue;
+            Vector2 carrierPosition = carrier.Position;
+            Systems_TeamSide carrierSide = carrier.Side;
 
             for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
             {
                 Systems_IPlayerHandle other = _registry.Get(slotIndex);
 
-                if (other == null || other.Side == carrier.Side)
+                if (other == null || other.Side == carrierSide)
                 {
                     continue;
                 }
 
-                float squared = (other.Position - carrier.Position).sqrMagnitude;
+                float squared = (other.Position - carrierPosition).sqrMagnitude;
 
                 if (squared < nearestSquared)
                 {
@@ -703,25 +707,6 @@ namespace PoFootball.Systems
             }
 
             return nearest;
-        }
-
-        private bool IsOpponentNear(Systems_IPlayerHandle carrier)
-        {
-            float reach = Systems_SimConstants.REACH_TACKLE_RANGE * 2f;
-            float reachSquared = reach * reach;
-
-            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
-            {
-                Systems_IPlayerHandle other = _registry.Get(slotIndex);
-
-                if (other != null && other.Side != carrier.Side
-                    && (other.Position - carrier.Position).sqrMagnitude <= reachSquared)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         /// <summary>
@@ -1150,7 +1135,7 @@ namespace PoFootball.Systems
 
         private void EndPlay(Systems_PlayOutcome outcome, Vector2 spot, Systems_TeamSide side)
         {
-            Vector2 clampedSpot = _field.ClampToField(spot);
+            Vector2 clampedSpot = Systems_FieldModel.ClampToField(spot);
             int ticks = _play.PhysicsTick;
             float netYards = _play.NetYards;
 
@@ -1184,7 +1169,7 @@ namespace PoFootball.Systems
             }
 
             Vector2 start = carrier.Position;
-            float distance = (GoalLineYOf(carrier.Side) - start.y) * direction;
+            float distance = (Systems_FieldModel.GoalLineYOf(carrier.Side) - start.y) * direction;
 
             for (int slot = 0; slot < Systems_PlayerRegistry.CAPACITY; slot++)
             {
@@ -1215,13 +1200,6 @@ namespace PoFootball.Systems
             }
 
             return true;
-        }
-
-        private static float GoalLineYOf(Systems_TeamSide side)
-        {
-            return side == Systems_TeamSide.Offense
-                ? Systems_FieldModel.ATTACKING_GOAL_LINE_Y
-                : Systems_FieldModel.OWN_GOAL_LINE_Y;
         }
 
         private static bool HasScored(Systems_TeamSide side, float y)

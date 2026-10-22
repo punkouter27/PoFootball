@@ -95,9 +95,13 @@ namespace PoFootball.Views
 
         /// <summary>
         /// Distance from the bottom of the status bar to the top of the result
-        /// banner: the scoreboard's own height plus a gap.
+        /// banner: the scoreboard's own height (146), the win-probability ribbon
+        /// Systems_BroadcastGraphicsView draws directly under it (40), and a gap.
+        /// It was 164 before the ribbon, which then sat under the banner and the
+        /// carrier chip; the gap stays when a viewer switches the ribbon off,
+        /// because a banner that jumps with a setting is worse than 40 units of turf.
         /// </summary>
-        private const int BANNER_CLEARANCE = 164;
+        private const int BANNER_CLEARANCE = 200;
 
         /// <summary>
         /// How far a pointer may travel, in panel units, and still be a tap. The
@@ -758,25 +762,7 @@ namespace PoFootball.Views
                 MphLabels[0], Systems_UiTheme.TEXT_BODY, Systems_UiTheme.TextPrimary);
             _carrierSpeed.style.marginLeft = Systems_UiTheme.SPACE_M;
 
-            // A track and a fill rather than a number: "how tired" is a gauge, and a
-            // percentage beside a speed reads as a second speed.
-            VisualElement track = new VisualElement();
-            track.style.width = 96;
-            track.style.height = Systems_UiTheme.SPACE_S;
-            track.style.marginLeft = Systems_UiTheme.SPACE_M;
-            track.style.backgroundColor = new Color(
-                Systems_UiTheme.TextMuted.r, Systems_UiTheme.TextMuted.g,
-                Systems_UiTheme.TextMuted.b, 0.3f);
-            track.pickingMode = PickingMode.Ignore;
-            Systems_UiTheme.SetRadius(track, Systems_UiTheme.SPACE_S / 2);
-
-            _carrierFatigueFill = new VisualElement();
-            _carrierFatigueFill.style.height = Length.Percent(100f);
-            _carrierFatigueFill.style.width = Length.Percent(0f);
-            _carrierFatigueFill.style.backgroundColor = Systems_UiTheme.Negative;
-            _carrierFatigueFill.pickingMode = PickingMode.Ignore;
-            Systems_UiTheme.SetRadius(_carrierFatigueFill, Systems_UiTheme.SPACE_S / 2);
-            track.Add(_carrierFatigueFill);
+            VisualElement track = BuildFatigueGauge(out _carrierFatigueFill);
 
             chip.Add(_carrierRole);
             chip.Add(_carrierSpeed);
@@ -1229,23 +1215,7 @@ namespace PoFootball.Views
             _focusSpeed.style.marginLeft = Systems_UiTheme.SPACE_M;
             _focusSpeed.pickingMode = PickingMode.Ignore;
 
-            VisualElement track = new VisualElement();
-            track.style.width = 96;
-            track.style.height = Systems_UiTheme.SPACE_S;
-            track.style.marginLeft = Systems_UiTheme.SPACE_M;
-            track.style.backgroundColor = new Color(
-                Systems_UiTheme.TextMuted.r, Systems_UiTheme.TextMuted.g,
-                Systems_UiTheme.TextMuted.b, 0.3f);
-            track.pickingMode = PickingMode.Ignore;
-            Systems_UiTheme.SetRadius(track, Systems_UiTheme.SPACE_S / 2);
-
-            _focusFatigueFill = new VisualElement();
-            _focusFatigueFill.style.height = Length.Percent(100f);
-            _focusFatigueFill.style.width = Length.Percent(0f);
-            _focusFatigueFill.style.backgroundColor = Systems_UiTheme.Negative;
-            _focusFatigueFill.pickingMode = PickingMode.Ignore;
-            Systems_UiTheme.SetRadius(_focusFatigueFill, Systems_UiTheme.SPACE_S / 2);
-            track.Add(_focusFatigueFill);
+            VisualElement track = BuildFatigueGauge(out _focusFatigueFill);
 
             // A cross, where "TAP TO RELEASE" used to be: fourteen letters of
             // instruction on a card whose other four items are one word or less,
@@ -1369,26 +1339,40 @@ namespace PoFootball.Views
         }
 
         /// <summary>
-        /// The player holding the ball while the play is live, or null. Same test as
-        /// Systems_BroadcastCameraView.LiveCarrier: a carrier after the whistle is
-        /// just whoever was tackled, coasting.
+        /// A track and a fill rather than a number: "how tired" is a gauge, and a
+        /// percentage beside a speed reads as a second speed. Shared by the carrier
+        /// chip and the focus card.
+        /// </summary>
+        private static VisualElement BuildFatigueGauge(out VisualElement fill)
+        {
+            VisualElement track = new VisualElement();
+            track.style.width = 96;
+            track.style.height = Systems_UiTheme.SPACE_S;
+            track.style.marginLeft = Systems_UiTheme.SPACE_M;
+            track.style.backgroundColor = new Color(
+                Systems_UiTheme.TextMuted.r, Systems_UiTheme.TextMuted.g,
+                Systems_UiTheme.TextMuted.b, 0.3f);
+            track.pickingMode = PickingMode.Ignore;
+            Systems_UiTheme.SetRadius(track, Systems_UiTheme.SPACE_S / 2);
+
+            fill = new VisualElement();
+            fill.style.height = Length.Percent(100f);
+            fill.style.width = Length.Percent(0f);
+            fill.style.backgroundColor = Systems_UiTheme.Negative;
+            fill.pickingMode = PickingMode.Ignore;
+            Systems_UiTheme.SetRadius(fill, Systems_UiTheme.SPACE_S / 2);
+            track.Add(fill);
+
+            return track;
+        }
+
+        /// <summary>
+        /// The player holding the ball while the play is live, or null — the same
+        /// test as Systems_BroadcastCameraView, from Systems_PlayerRegistry.LiveCarrier.
         /// </summary>
         private Systems_IPlayerHandle LiveCarrier()
         {
-            if (_play == null || _ball == null || _registry == null
-                || _play.Phase != Systems_PlayPhase.Live || !_ball.IsHeld)
-            {
-                return null;
-            }
-
-            int carrierId = _ball.CarrierId;
-
-            if (carrierId < 0 || carrierId >= Systems_PlayerRegistry.CAPACITY)
-            {
-                return null;
-            }
-
-            return _registry.Get(carrierId);
+            return _registry == null ? null : _registry.LiveCarrier(_play, _ball);
         }
 
         private void RefreshCarrier()

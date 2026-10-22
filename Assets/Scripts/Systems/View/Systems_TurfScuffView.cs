@@ -519,7 +519,7 @@ namespace PoFootball.Views
         /// <summary>
         /// Re-resolves the carrier only when possession actually moves.
         ///
-        /// Systems_PlayerRegistry.FindById is a linear scan of forty-four slots.
+        /// Systems_PlayerRegistry.FindById is a linear scan of twenty-two slots.
         /// Doing it every frame would be a walk over the registry — precisely the
         /// per-frame pattern this view's header promises not to reintroduce — so it
         /// runs on the handful of frames a game where CarrierId changes.

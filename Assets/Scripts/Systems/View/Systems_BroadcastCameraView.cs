@@ -62,6 +62,20 @@ namespace PoFootball.Views
     /// its own shot and bends the result (<see cref="ApplySpectator"/>). So the
     /// damping, the field clamp and the one-writer rule are all unchanged, and
     /// handing the shot back is just the model going back to its defaults.
+    ///
+    /// AND A DIRECTOR CALLS THE SHOT. The operator above frames whatever play is in
+    /// front of it the same way every time; a broadcast does not. Five moments get
+    /// a shot of their own — tight on a quarterback with the rush arriving, wide
+    /// and leading on a runner who is gone, pulled back to hold both ends of a
+    /// pass, on the returner under a kick, and the whole end zone at the goal line.
+    /// Systems_ShotDirector decides WHEN, from facts this class reads off the
+    /// models (<see cref="ReadSituation"/>), and owns every hold and hysteresis
+    /// that stops the picture flapping between them; this class decides only HOW
+    /// each one is framed (<see cref="TryDirectedShot"/>). A directed shot replaces
+    /// the operator's target and size and nothing else: the viewer's tap, drag and
+    /// pinch still bend it afterwards, MoveShot still damps it, and the field clamp
+    /// still holds it. With Systems_BroadcastSettings.AutoDirector off, the director
+    /// answers Default on every frame and the shot is exactly the operator's.
     /// </summary>
     [DefaultExecutionOrder(-40)]
     [RequireComponent(typeof(Camera))]
@@ -292,6 +306,51 @@ namespace PoFootball.Views
         /// </summary>
         private const float MIN_MANUAL_SIZE = 4f;
 
+        /// <summary>
+        /// The pocket shot's half-height as a fraction of the snap shot. Tighter
+        /// than the formation on purpose — the receivers are the one thing this
+        /// shot is NOT about — and opened back up as far as the snap shot to keep
+        /// the nearest rusher in, because the shot exists to show him arrive.
+        /// </summary>
+        private const float POCKET_SIZE_FRACTION = 0.6f;
+
+        /// <summary>
+        /// Metres the pocket shot sits downfield of the quarterback, so the line he
+        /// is standing behind is in the picture and not just the grass behind him.
+        /// </summary>
+        private const float POCKET_LEAD_METRES = 2.5f;
+
+        /// <summary>
+        /// The breakaway shot's lead toward the goal, as a fraction of its
+        /// half-height. Twice DOWNFIELD_LEAD: a runner who is gone is running at
+        /// the end zone, and the open grass in front of him is the story.
+        /// </summary>
+        private const float BREAKAWAY_LEAD = 0.45f;
+
+        /// <summary>
+        /// How far past the wide shot a pass in the air may pull the picture back,
+        /// as a multiple. A deep ball can put forty metres between the passer and
+        /// his target, and the shot exists to hold both ends of it.
+        /// </summary>
+        private const float AIR_MAX_STRETCH = 1.15f;
+
+        /// <summary>The goal-line shot is called with the snap inside this many yards.</summary>
+        private const float GOAL_LINE_YARDS = 5f;
+
+        /// <summary>
+        /// Metres of backfield the goal-line shot keeps behind the line of
+        /// scrimmage — the quarterback and the back — with the end zone filling the
+        /// rest of the frame in front of them.
+        /// </summary>
+        private const float GOAL_LINE_BACKFIELD_METRES = 7f;
+
+        private readonly Systems_ShotDirector _director = new Systems_ShotDirector();
+
+        // The carrier's opponents, filled for the breakaway projection. Sized once
+        // for the whole roster so a frame allocates nothing.
+        private readonly Vector2[] _opponentPositions = new Vector2[Systems_PlayerRegistry.CAPACITY];
+        private readonly float[] _opponentTopSpeeds = new float[Systems_PlayerRegistry.CAPACITY];
+
         private ISubscriber<Systems_PlaySnappedMessage> _snappedSubscriber;
         private ISubscriber<Systems_PassThrownMessage> _thrownSubscriber;
         private ISubscriber<Systems_HighlightPlaybackMessage> _highlightSubscriber;
@@ -327,6 +386,13 @@ namespace PoFootball.Views
         private bool _highlightPlaying;
         private bool _highlightCut;
         private Vector2 _highlightFocus;
+
+        /// <summary>
+        /// The shot the director is framing, for the HUD to label. Default whenever
+        /// the director is switched off, the camera is not running, or a post-game
+        /// highlight has the shot.
+        /// </summary>
+        public Systems_ShotKind CurrentShot => _director.Current;
 
         [Inject]
         public void Construct(
@@ -386,6 +452,7 @@ namespace PoFootball.Views
 
             if (_highlightPlaying)
             {
+                _director.Reset();
                 FrameHighlight(deltaTime);
                 return;
             }
@@ -395,8 +462,13 @@ namespace PoFootball.Views
 
             ReadThreats(carrier);
 
-            Vector2 target = FramingTarget(carrier, openness);
-            float targetSize = FramingSize(target, openness);
+            Systems_ShotKind shot = _director.Advance(ReadSituation(carrier), deltaTime);
+
+            if (!TryDirectedShot(shot, carrier, out Vector2 target, out float targetSize))
+            {
+                target = FramingTarget(carrier, openness);
+                targetSize = FramingSize(target, openness);
+            }
 
             ApplySpectator(ref target, ref targetSize);
 
@@ -538,20 +610,7 @@ namespace PoFootball.Views
         /// </summary>
         private Systems_IPlayerHandle LiveCarrier()
         {
-            if (_play == null || _registry == null
-                || _play.Phase != Systems_PlayPhase.Live || !_ball.IsHeld)
-            {
-                return null;
-            }
-
-            int carrierId = _ball.CarrierId;
-
-            if (carrierId < 0 || carrierId >= Systems_PlayerRegistry.CAPACITY)
-            {
-                return null;
-            }
-
-            return _registry.Get(carrierId);
+            return _registry == null ? null : _registry.LiveCarrier(_play, _ball);
         }
 
         /// <summary>
@@ -878,6 +937,300 @@ namespace PoFootball.Views
             return position;
         }
 
+        // --- The director's shots ------------------------------------------------
+
+        /// <summary>
+        /// The facts the director chooses a shot on, read off the models this
+        /// frame. Called after ReadThreats, whose nearest defender is the pocket
+        /// shot's rusher. With the setting off nothing else is read at all.
+        /// </summary>
+        private Systems_ShotSituation ReadSituation(Systems_IPlayerHandle carrier)
+        {
+            if (!Systems_BroadcastSettings.AutoDirector || _play == null)
+            {
+                return new Systems_ShotSituation(
+                    false, false, false, false, false, false, float.MaxValue, false);
+            }
+
+            bool hasCarrier = carrier != null;
+
+            // Behind the line with no forward pass yet: a quarterback who has
+            // scrambled past the line is a runner, and the breakaway and default
+            // shots are the ones that cover a runner.
+            bool passerHoldingBall = hasCarrier
+                && carrier.Role == Systems_PlayerRole.Quarterback
+                && carrier.Side == Systems_TeamSide.Offense
+                && !_play.ForwardPassThrown
+                && carrier.Position.y <= _play.LineOfScrimmageY;
+
+            float nearestRusher = hasCarrier && _hasNearestThreat
+                ? Vector2.Distance(carrier.Position, _nearestThreat)
+                : float.MaxValue;
+
+            // The offense's own goal line, so not after a turnover, and not on a
+            // kick: a field goal from the five is the kick shot's business.
+            bool goalLine = _play.Phase != Systems_PlayPhase.Dead
+                && !_play.Kind.IsKick()
+                && _ball.PossessingSide == Systems_TeamSide.Offense
+                && Systems_FieldModel.YardsToAttackingGoal(_play.LineOfScrimmageY) <= GOAL_LINE_YARDS;
+
+            return new Systems_ShotSituation(
+                true,
+                _ball.IsInFlight,
+                _ball.IsKicked,
+                hasCarrier,
+                hasCarrier && CarrierIsGone(carrier),
+                passerHoldingBall,
+                nearestRusher,
+                goalLine);
+        }
+
+        /// <summary>
+        /// Fills the opponents' positions and top speeds and asks the director's
+        /// projection whether the carrier is gone. Top speed by role alone, as the
+        /// referee judges it, so the camera and the officials agree on a breakaway.
+        /// </summary>
+        private bool CarrierIsGone(Systems_IPlayerHandle carrier)
+        {
+            int count = 0;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle opponent = _registry.Get(slotIndex);
+
+                if (opponent == null || opponent.Side == carrier.Side)
+                {
+                    continue;
+                }
+
+                _opponentPositions[count] = opponent.Position;
+                _opponentTopSpeeds[count] = Systems_RoleTable.TopSpeedOf(opponent.Role);
+                count++;
+            }
+
+            float direction = carrier.Side == Systems_TeamSide.Offense ? 1f : -1f;
+
+            return Systems_ShotDirector.IsBreakaway(
+                carrier.Position,
+                carrier.Velocity,
+                direction,
+                Systems_FieldModel.GoalLineYOf(carrier.Side),
+                _opponentPositions,
+                _opponentTopSpeeds,
+                count);
+        }
+
+        /// <summary>
+        /// The target and size of a directed shot, or false for the operator's own
+        /// framing — which is what Default is, and what any shot falls back to if
+        /// the body it is about cannot be found this frame.
+        /// </summary>
+        private bool TryDirectedShot(
+            Systems_ShotKind shot,
+            Systems_IPlayerHandle carrier,
+            out Vector2 target,
+            out float size)
+        {
+            target = Vector2.zero;
+            size = 0f;
+
+            switch (shot)
+            {
+                case Systems_ShotKind.Pocket:
+                    return carrier != null && PocketShot(carrier, out target, out size);
+
+                case Systems_ShotKind.Breakaway:
+                    return carrier != null && BreakawayShot(carrier, out target, out size);
+
+                case Systems_ShotKind.BallInAir:
+                    return AirShot(out target, out size);
+
+                case Systems_ShotKind.Kick:
+                    return KickShot(out target, out size);
+
+                case Systems_ShotKind.GoalLine:
+                    return GoalLineShot(out target, out size);
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Tight on the quarterback, just ahead of him, opened only as far as it
+        /// takes to hold the nearest rusher. Never wider than the snap shot.
+        /// </summary>
+        private bool PocketShot(Systems_IPlayerHandle quarterback, out Vector2 target, out float size)
+        {
+            float tight = TightSize();
+
+            target = quarterback.Position + new Vector2(0f, POCKET_LEAD_METRES);
+            size = tight * POCKET_SIZE_FRACTION;
+
+            if (_hasNearestThreat)
+            {
+                size = Mathf.Max(size, SizeToHold(_nearestThreat, target));
+            }
+
+            size = Mathf.Min(size, tight);
+            target = KeepBallInFrame(target, _ball.Position, size);
+            return true;
+        }
+
+        /// <summary>
+        /// The wide shot, led hard toward the goal the carrier is running at —
+        /// either one, so a pick-six is led toward -Y — with the operator's
+        /// sideways lead kept.
+        /// </summary>
+        private bool BreakawayShot(Systems_IPlayerHandle carrier, out Vector2 target, out float size)
+        {
+            size = WideSize();
+
+            float direction = carrier.Side == Systems_TeamSide.Offense ? 1f : -1f;
+            Vector2 position = carrier.Position;
+
+            target = new Vector2(
+                (position.x * _lateralTracking) + LateralLead(carrier, size),
+                position.y + (direction * size * BREAKAWAY_LEAD));
+
+            target = KeepBallInFrame(target, _ball.Position, size);
+            return true;
+        }
+
+        /// <summary>
+        /// The box around the ball, the passer and the receiver — or, on a ball
+        /// thrown to nobody, where it will come down — centred and sized to hold
+        /// all of it, up to AIR_MAX_STRETCH past the wide shot. Where the operator's
+        /// FlightTarget frames only the ball and the receiver, this keeps the
+        /// passer in too, so the viewer sees who threw it as well as who it is for.
+        /// </summary>
+        private bool AirShot(out Vector2 target, out float size)
+        {
+            Vector2 ball = _ball.Position;
+            Vector2 min = ball;
+            Vector2 max = ball;
+
+            Systems_IPlayerHandle passer = _ball.ThrowerId >= 0
+                ? _registry.FindById(_ball.ThrowerId)
+                : null;
+
+            if (passer != null)
+            {
+                Encapsulate(passer.Position, ref min, ref max);
+            }
+
+            Vector2 destination = _passTarget != null
+                ? _passTarget.Position
+                : LandingPoint(Systems_SimConstants.PASS_GRAVITY);
+
+            Encapsulate(destination, ref min, ref max);
+
+            target = (min + max) * 0.5f;
+
+            // The box is symmetric about its centre, so holding one corner holds
+            // all four.
+            size = Mathf.Clamp(
+                SizeToHold(max, target), TightSize(), WideSize() * AIR_MAX_STRETCH);
+
+            target = KeepBallInFrame(target, ball, size);
+            return true;
+        }
+
+        /// <summary>
+        /// The ball and the receiving player nearest where it will land — the man
+        /// who will field it, before anybody has. False before the bodies are
+        /// registered, which hands the kick back to the operator's coverage shot.
+        /// </summary>
+        private bool KickShot(out Vector2 target, out float size)
+        {
+            target = Vector2.zero;
+            size = 0f;
+
+            Vector2 landing = LandingPoint(Systems_SimConstants.KICK_GRAVITY);
+            Systems_IPlayerHandle returner = null;
+            float nearestSqr = float.MaxValue;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle player = _registry.Get(slotIndex);
+
+                // The kicking side possesses a ball in the air off its foot; the
+                // returner is whoever is on the other one.
+                if (player == null || player.Side == _ball.PossessingSide)
+                {
+                    continue;
+                }
+
+                float sqrDistance = (player.Position - landing).sqrMagnitude;
+
+                if (sqrDistance < nearestSqr)
+                {
+                    nearestSqr = sqrDistance;
+                    returner = player;
+                }
+            }
+
+            if (returner == null)
+            {
+                return false;
+            }
+
+            Vector2 ball = _ball.Position;
+
+            target = (ball + returner.Position) * 0.5f;
+            target.x *= _lateralTracking;
+
+            size = Mathf.Clamp(
+                Mathf.Max(SizeToHold(ball, target), SizeToHold(returner.Position, target)),
+                TightSize(),
+                WideSize());
+
+            target = KeepBallInFrame(target, ball, size);
+            return true;
+        }
+
+        /// <summary>
+        /// The snap shot's size, centred between a few metres of backfield and the
+        /// back of the end zone, so the whole end zone is in the picture for the
+        /// snap and stays there for the play. It does not open up as the operator's
+        /// shot does: a goal-line play is decided in five yards.
+        /// </summary>
+        private bool GoalLineShot(out Vector2 target, out float size)
+        {
+            Vector2 ball = _ball.Position;
+            float backfield =
+                Mathf.Min(ball.y, _play.LineOfScrimmageY) - GOAL_LINE_BACKFIELD_METRES;
+
+            size = TightSize();
+            target = new Vector2(
+                ball.x * _lateralTracking,
+                (backfield + Systems_FieldModel.ATTACKING_BACK_LINE_Y) * 0.5f);
+
+            target = KeepBallInFrame(target, ball, size);
+            return true;
+        }
+
+        /// <summary>
+        /// Where the ball in the air will come down, from its height and climb
+        /// under <paramref name="gravity"/>: the positive root of
+        /// h + v t - g t^2 / 2 = 0, carried along its ground velocity.
+        /// </summary>
+        private Vector2 LandingPoint(float gravity)
+        {
+            float climb = _ball.VerticalVelocity;
+            float height = Mathf.Max(0f, _ball.Height);
+            float discriminant = (climb * climb) + (2f * gravity * height);
+            float seconds = (climb + Mathf.Sqrt(Mathf.Max(0f, discriminant))) / Mathf.Max(gravity, 0.01f);
+
+            return _ball.Position + (_ball.Velocity * Mathf.Max(0f, seconds));
+        }
+
+        private static void Encapsulate(Vector2 point, ref Vector2 min, ref Vector2 max)
+        {
+            min = Vector2.Min(min, point);
+            max = Vector2.Max(max, point);
+        }
+
         /// <summary>
         /// Only records what the reel said; the shot is moved in LateUpdate. The
         /// reel publishes from its Update, so this frame's focus is in hand before
@@ -912,6 +1265,7 @@ namespace PoFootball.Views
         private void OnSnapped(Systems_PlaySnappedMessage message)
         {
             _passTarget = null;
+            _director.Reset();
 
             // Snap the shot straight to the new line of scrimmage. Damping across
             // a spot change would send the camera sailing sixty yards down the

@@ -303,7 +303,7 @@ namespace PoFootball.Tests
                             Systems_FormationSlot slot = SlotOf(offense, defense, index);
 
                             Assert.That(
-                                field.IsOutsideSidelines(slot.OffsetX), Is.False,
+                                Systems_FieldModel.IsOutsideSidelines(slot.OffsetX), Is.False,
                                 $"{offense}/{defense}: slot {index} spawns outside the sidelines");
 
                             float y = lineOfScrimmageY + slot.OffsetY;

@@ -171,7 +171,7 @@ namespace PoFootball.Models
             }
 
             float receivingYardLine =
-                (Systems_FieldModel.ATTACKING_GOAL_LINE_Y - startY) / Systems_FieldModel.YARD;
+                Systems_FieldModel.YardsToAttackingGoal(startY);
 
             float kickNetYards = (startY - play.LineOfScrimmageY) / Systems_FieldModel.YARD;
 

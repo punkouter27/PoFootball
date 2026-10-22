@@ -226,28 +226,42 @@ namespace PoFootball.Views
 
             VisualElement sheet = Systems_UiTheme.BottomSheet();
 
-            VisualElement soundPane = BuildSoundPane();
-            VisualElement seedPane = BuildSeedPane();
+            VisualElement[] panes =
+            {
+                BuildSoundPane(),
+                BuildSeedPane(),
+                BuildBroadcastPane()
+            };
 
-            VisualElement panes = Systems_UiTheme.Column();
-            panes.style.height = SETTINGS_PANE_HEIGHT;
-            panes.Add(soundPane);
-            panes.Add(seedPane);
+            VisualElement paneBox = Systems_UiTheme.Column();
+            paneBox.style.height = SETTINGS_PANE_HEIGHT;
 
-            Button soundTab = null;
-            Button seedTab = null;
+            for (int index = 0; index < panes.Length; index++)
+            {
+                paneBox.Add(panes[index]);
+            }
 
-            soundTab = Tab("SOUND", () => SelectTab(soundTab, seedTab, soundPane, seedPane));
-            seedTab = Tab("GAME SEED", () => SelectTab(seedTab, soundTab, seedPane, soundPane));
-            seedTab.style.marginLeft = Systems_UiTheme.SPACE_S;
+            string[] titles = { "SOUND", "GAME SEED", "BROADCAST" };
+            Button[] tabButtons = new Button[titles.Length];
 
             VisualElement tabs = Systems_UiTheme.Row();
             tabs.name = "SettingsTabs";
             tabs.style.marginBottom = Systems_UiTheme.SPACE_M;
-            tabs.Add(soundTab);
-            tabs.Add(seedTab);
 
-            SelectTab(soundTab, seedTab, soundPane, seedPane);
+            for (int index = 0; index < titles.Length; index++)
+            {
+                int selected = index;
+                tabButtons[index] = Tab(titles[index], () => SelectTab(selected, tabButtons, panes));
+
+                if (index > 0)
+                {
+                    tabButtons[index].style.marginLeft = Systems_UiTheme.SPACE_S;
+                }
+
+                tabs.Add(tabButtons[index]);
+            }
+
+            SelectTab(0, tabButtons, panes);
 
             Button done = Systems_UiTheme.Button("DONE", Systems_UiTheme.Action, overlay.Hide);
             done.style.marginTop = Systems_UiTheme.SPACE_M;
@@ -255,7 +269,7 @@ namespace PoFootball.Views
             Systems_UiTheme.ApplySecondaryActionSize(done);
 
             sheet.Add(tabs);
-            sheet.Add(panes);
+            sheet.Add(paneBox);
             sheet.Add(done);
 
             overlay.Content.Add(sheet);
@@ -273,21 +287,106 @@ namespace PoFootball.Views
 
         /// <summary>
         /// The selected tab takes the action tint — it is the sheet's title — and
-        /// the other drops back to chrome. Display rather than a fade between the
-        /// panes: both occupy the same box, and a cross-fade would put two sets of
-        /// controls under the thumb for a fifth of a second.
+        /// the others drop back to chrome. Display rather than a fade between the
+        /// panes: they all occupy the same box, and a cross-fade would put two sets
+        /// of controls under the thumb for a fifth of a second.
         /// </summary>
-        private static void SelectTab(
-            Button selected, Button other, VisualElement selectedPane, VisualElement otherPane)
+        private static void SelectTab(int selected, Button[] tabs, VisualElement[] panes)
         {
-            selected.style.backgroundColor = Systems_UiTheme.Action;
-            selected.style.color = Systems_UiTheme.SurfaceRaised;
+            for (int index = 0; index < tabs.Length; index++)
+            {
+                bool isSelected = index == selected;
 
-            other.style.backgroundColor = Systems_UiTheme.SurfaceOverField;
-            other.style.color = Systems_UiTheme.TextPrimary;
+                tabs[index].style.backgroundColor = isSelected
+                    ? Systems_UiTheme.Action
+                    : Systems_UiTheme.SurfaceOverField;
+                tabs[index].style.color = isSelected
+                    ? Systems_UiTheme.SurfaceRaised
+                    : Systems_UiTheme.TextPrimary;
 
-            selectedPane.style.display = DisplayStyle.Flex;
-            otherPane.style.display = DisplayStyle.None;
+                panes[index].style.display = isSelected ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+        }
+
+        /// <summary>
+        /// The broadcast graphics, one lit-or-quiet switch each, two to a row.
+        ///
+        /// SWITCHES, NOT A LIST OF TOGGLES. Nine Toggle controls at TAP_TARGET each
+        /// would need a sheet three times this tall or a scroll view; a grid of
+        /// half-width segments fits all nine in the pane the other two tabs already
+        /// use, keeps every target the full half-width of the sheet, and reads the
+        /// way the seed pane's NEW GAME / SAME GAME pair already does: lit is on.
+        ///
+        /// LIVE WEATHER says what it does in the hint under the grid, because it is
+        /// the one switch that makes a network request (Systems_BroadcastSettings
+        /// .LiveWeather has the privacy reasoning).
+        /// </summary>
+        private static VisualElement BuildBroadcastPane()
+        {
+            VisualElement pane = Systems_UiTheme.Column();
+            pane.name = "BroadcastPane";
+
+            VisualElement grid = Systems_UiTheme.Row();
+            grid.style.flexWrap = Wrap.Wrap;
+            grid.style.alignItems = Align.FlexStart;
+
+            grid.Add(Switch("WIN PROB", () => Systems_BroadcastSettings.WinProbability,
+                value => Systems_BroadcastSettings.WinProbability = value));
+            grid.Add(Switch("CALL SHEET", () => Systems_BroadcastSettings.CallSheet,
+                value => Systems_BroadcastSettings.CallSheet = value));
+            grid.Add(Switch("SPACE + SEPARATION", () => Systems_BroadcastSettings.SpaceControl,
+                value => Systems_BroadcastSettings.SpaceControl = value));
+            grid.Add(Switch("FATIGUE RINGS", () => Systems_BroadcastSettings.FatigueRings,
+                value => Systems_BroadcastSettings.FatigueRings = value));
+            grid.Add(Switch("PLAY-BY-PLAY", () => Systems_BroadcastSettings.Commentary,
+                value => Systems_BroadcastSettings.Commentary = value));
+            grid.Add(Switch("VOICE", () => Systems_BroadcastSettings.Speech,
+                value => Systems_BroadcastSettings.Speech = value));
+            grid.Add(Switch("AUTO DIRECTOR", () => Systems_BroadcastSettings.AutoDirector,
+                value => Systems_BroadcastSettings.AutoDirector = value));
+            grid.Add(Switch("HAPTICS", () => Systems_BroadcastSettings.Haptics,
+                value => Systems_BroadcastSettings.Haptics = value));
+            grid.Add(Switch("LIVE WEATHER", () => Systems_BroadcastSettings.LiveWeather,
+                value => Systems_BroadcastSettings.LiveWeather = value));
+
+            Label hint = Systems_UiTheme.Text(
+                "Live weather asks open-meteo.com for one stadium city's conditions at kickoff. "
+                + "Off, the sky is drawn from the game seed.",
+                Systems_UiTheme.TEXT_CAPTION - 2,
+                Systems_UiTheme.TextMuted);
+            hint.style.whiteSpace = WhiteSpace.Normal;
+            hint.style.marginTop = Systems_UiTheme.SPACE_XS;
+
+            pane.Add(grid);
+            pane.Add(hint);
+            return pane;
+        }
+
+        /// <summary>Five rows of these and the hint fill SETTINGS_PANE_HEIGHT exactly.</summary>
+        private const int SWITCH_HEIGHT = 48;
+
+        private static Button Switch(string label, System.Func<bool> read, System.Action<bool> write)
+        {
+            Button button = null;
+            button = Systems_UiTheme.Button(label, Systems_UiTheme.SurfaceOverField, () =>
+            {
+                write(!read());
+                StyleSegment(button, read());
+
+                // StyleSegment sets the seed pane's body size; nine switches need
+                // the smaller face to fit two to a row.
+                button.style.fontSize = Systems_UiTheme.TEXT_CAPTION + 2;
+            });
+
+            button.style.width = Length.Percent(49f);
+            button.style.minHeight = SWITCH_HEIGHT;
+            button.style.height = SWITCH_HEIGHT;
+            button.style.marginBottom = Systems_UiTheme.SPACE_XS;
+            button.style.marginRight = Length.Percent(1f);
+            Systems_UiTheme.SetPadding(button, Systems_UiTheme.SPACE_XS, Systems_UiTheme.SPACE_S);
+            StyleSegment(button, read());
+            button.style.fontSize = Systems_UiTheme.TEXT_CAPTION + 2;
+            return button;
         }
 
         /// <summary>Master, effects and crowd.</summary>

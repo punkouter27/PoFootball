@@ -129,6 +129,60 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
+        /// The chance <see cref="Choose"/> returns each call from this situation,
+        /// written into <paramref name="chances"/> indexed by (int)Systems_PlayCall —
+        /// what the broadcast's call sheet shows for a scripted quarterback.
+        ///
+        /// EXACT, NOT SAMPLED. Choose is a short tree of thresholds with at most
+        /// two draws on any path, so its distribution can be written down branch
+        /// for branch; Agent_PlayCallerTests checks this against Choose itself over
+        /// thousands of draws, so the two cannot drift apart unnoticed.
+        ///
+        /// <paramref name="isDeepShotPlay"/> moves the pass mass to PassDeep, as
+        /// Agent_FootballPlayer.ChooseCall does on its scripted deep-shot snaps.
+        /// </summary>
+        internal static void Chances(
+            int down,
+            float yardsToGo,
+            float yardsToGoal,
+            bool isDeepShotPlay,
+            float[] chances)
+        {
+            for (int index = 0; index < chances.Length; index++)
+            {
+                chances[index] = 0f;
+            }
+
+            float keep = 0f;
+            float handoff = 0f;
+            float pass = 0f;
+
+            if (yardsToGo <= SNEAK_YARDS)
+            {
+                keep = 1f;
+            }
+            else if (yardsToGo <= SHORT_YARDAGE_YARDS || yardsToGoal <= RED_ZONE_YARDS)
+            {
+                handoff = 1f;
+            }
+            else if (down >= Systems_GameRules.DOWNS_PER_SERIES
+                || (down >= 3 && yardsToGo >= LONG_YARDAGE_YARDS))
+            {
+                pass = 1f;
+            }
+            else
+            {
+                handoff = RunShareFor(down);
+                pass = 1f - handoff;
+            }
+
+            chances[(int)Systems_PlayCall.KeepQuarterback] = keep;
+            chances[(int)Systems_PlayCall.HandoffHalfback] = handoff * 0.5f;
+            chances[(int)Systems_PlayCall.HandoffFullback] = handoff * 0.5f;
+            chances[(int)(isDeepShotPlay ? Systems_PlayCall.PassDeep : Systems_PlayCall.Pass)] = pass;
+        }
+
+        /// <summary>
         /// The kick-or-go decision, made BEFORE the snap since revision 14 — a punt
         /// is a formation, not something a quarterback can decide with the rush
         /// already on him. Kick when kicking is what a real offense would do, and go
