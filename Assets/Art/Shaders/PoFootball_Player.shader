@@ -51,6 +51,10 @@ Shader "PoFootball/Player"
         _BevelDepth("Bevel depth", Range(0, 1)) = 0.55
         _BevelLift("Centre lift", Range(0, 1)) = 0.3
 
+        // How much the rim facing the stadium's key light catches it, and the
+        // rim facing away loses it. See PlayerKeyDirection in PlayerBody.hlsl.
+        _Relief("Relief toward the key light", Range(0, 1)) = 0.7
+
         [Header(Per instance state)]
         _Carrier("Carrier amount", Range(0, 1)) = 0
         _CarrierColor("Carrier glow", Color) = (1, 0.937, 0.694, 1)
@@ -110,7 +114,8 @@ Shader "PoFootball/Player"
             float _FatigueDesaturation;     \
             float _Lean;                    \
             float _Impact;                  \
-            float _Breath;
+            float _Breath;                  \
+            float _Relief;
 
         // Narrows the body across its local X. The rigidbody already rotates the
         // player to face its direction of travel, so local X is "across the
@@ -155,6 +160,7 @@ Shader "PoFootball/Player"
             {
                 COMMON_2D_LIT_OUTPUTS
                 half4 color : COLOR;
+                half2 keyDirection : TEXCOORD4;
             };
 
             #include "Packages/com.unity.render-pipelines.universal/Shaders/2D/Include/Lit2DCommon.hlsl"
@@ -175,12 +181,13 @@ Shader "PoFootball/Player"
 
                 Varyings o = CommonLitVertex(input);
                 o.color = input.color * _Color * unity_SpriteColor;
+                o.keyDirection = PlayerKeyDirection();
                 return o;
             }
 
             half4 PlayerFragment(Varyings input) : SV_Target
             {
-                half4 body = PlayerBody(input.uv, input.color);
+                half4 body = PlayerBody(input.uv, input.color, input.keyDirection);
                 clip(body.a - 0.003);
 
                 SurfaceData2D surfaceData;
@@ -269,6 +276,7 @@ Shader "PoFootball/Player"
             {
                 COMMON_2D_OUTPUTS
                 half4 color : COLOR;
+                half2 keyDirection : TEXCOORD4;
             };
 
             #include "Packages/com.unity.render-pipelines.universal/Shaders/2D/Include/2DCommon.hlsl"
@@ -292,12 +300,13 @@ Shader "PoFootball/Player"
 
                 Varyings o = CommonUnlitVertex(input);
                 o.color = input.color * _Color * unity_SpriteColor;
+                o.keyDirection = PlayerKeyDirection();
                 return o;
             }
 
             half4 UnlitFragment(Varyings input) : SV_Target
             {
-                return PlayerBody(input.uv, input.color);
+                return PlayerBody(input.uv, input.color, input.keyDirection);
             }
             ENDHLSL
         }

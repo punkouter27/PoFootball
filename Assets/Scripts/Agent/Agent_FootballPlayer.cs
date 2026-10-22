@@ -1220,9 +1220,17 @@ namespace PoFootball.Agents
 
             _contactImpulse = 0f;
 
-            float load = (Mathf.Abs(driveForce) / _driveForce)
-                + (Mathf.Abs(steerTorque) / _steerTorque)
-                + contactLoad;
+            float driveLoad = Mathf.Abs(driveForce) / _driveForce;
+            float steerLoad = Mathf.Abs(steerTorque) / _steerTorque;
+            float load = driveLoad + steerLoad + contactLoad;
+
+            // Read by the DEBUG sheet only, to check the claim above at run time:
+            // that the contact term is actually carrying load. Nothing reads it
+            // back into the simulation.
+            if (_health != null)
+            {
+                _health.RecordLoad(driveLoad, steerLoad, contactLoad);
+            }
 
             _fatigue += load
                 * Systems_SimConstants.FATIGUE_GAIN_PER_UNIT_LOAD

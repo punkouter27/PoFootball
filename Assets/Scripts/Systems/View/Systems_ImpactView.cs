@@ -62,8 +62,17 @@ namespace PoFootball.Views
     /// NO CAMERA SHAKE, DELIBERATELY. Systems_BroadcastCameraView used to kick on a
     /// big hit and drop into slow motion, and both were removed — the slow motion
     /// because a presentation view driving Time.timeScale stranded the editor at
-    /// 0.35 when a scene unloaded mid-effect. Nothing here writes a global, and
-    /// nothing here touches the camera.
+    /// 0.35 when a scene unloaded mid-effect. Nothing here touches the camera or
+    /// the clock.
+    ///
+    /// A HIT THAT CAN STRIP THE BALL SENDS A RIPPLE ACROSS THE TURF. The ring above
+    /// is thirty motes; this is the grass itself, laid flat outward from the
+    /// contact — a bright crest and a dark trough that PoFootball/Turf draws from
+    /// four shader globals this view advances (<see cref="TickRipples"/>). The one
+    /// global this view writes, and it is put back to empty on destroy, so a scene
+    /// unloaded mid-ripple cannot leave one frozen on the next scene's field. Same
+    /// threshold as the ring and as Systems_PostProcessView's lens pulse: the
+    /// three are one event, seen three ways.
     /// </summary>
     [DefaultExecutionOrder(-50)]
     [DisallowMultipleComponent]
@@ -244,6 +253,41 @@ namespace PoFootball.Views
         /// </summary>
         private static readonly Color MarkColor = new Color(0.2f, 0.17f, 0.1f, 0.3f);
 
+        /// <summary>
+        /// Ripples running at once. The turf shader's POFOOTBALL_RIPPLE_SLOTS; a
+        /// fifth hit inside one ripple's life takes the oldest slot.
+        /// </summary>
+        private const int RIPPLE_SLOTS = 4;
+
+        /// <summary>
+        /// How fast the crest travels, in yards per game second. A little faster
+        /// than anyone can run, so it reads as the hit going out through the
+        /// ground and not as something chasing the pile.
+        /// </summary>
+        private const float RIPPLE_SPEED_YARDS = 10f;
+
+        /// <summary>
+        /// Game seconds a ripple lasts. Gone at about eleven yards — the near
+        /// players, not the far sideline.
+        /// </summary>
+        private const float RIPPLE_SECONDS = 1.1f;
+
+        /// <summary>Amplitude of a hit just over the fumble threshold; the hardest reaches 1.</summary>
+        private const float RIPPLE_MIN_AMPLITUDE = 0.55f;
+
+        private static readonly int RipplesId = Shader.PropertyToID("_PoFootballRipples");
+
+        /// <summary>
+        /// What the shader reads, and the state behind it. Pre-allocated: written
+        /// every frame a ripple is running, and SetGlobalVectorArray copies it.
+        /// </summary>
+        private readonly Vector4[] _ripples = new Vector4[RIPPLE_SLOTS];
+        private readonly Vector2[] _rippleCentre = new Vector2[RIPPLE_SLOTS];
+        private readonly float[] _rippleAge = new float[RIPPLE_SLOTS];
+        private readonly float[] _rippleStrength = new float[RIPPLE_SLOTS];
+        private int _nextRipple;
+        private int _liveRipples;
+
         private Systems_PlayerRegistry _registry;
         private Systems_PresentationBudget _budget;
         private ISubscriber<Systems_TackleMessage> _tackleSubscriber;
@@ -322,6 +366,20 @@ namespace PoFootball.Views
 
             _contactSubscription?.Dispose();
             _contactSubscription = null;
+
+            if (_liveRipples > 0)
+            {
+                ClearRipples();
+            }
+        }
+
+        private void Update()
+        {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
+            if (_liveRipples > 0)
+            {
+                TickRipples(Time.deltaTime);
+            }
         }
 
         private void BuildParticles(Material source)
@@ -551,7 +609,85 @@ namespace PoFootball.Views
             if (message.ClosingSpeed >= Systems_SimConstants.FUMBLE_CLOSING_SPEED)
             {
                 EmitRing(point);
+
+                StartRipple(point, Mathf.Lerp(
+                    RIPPLE_MIN_AMPLITUDE, 1f,
+                    Mathf.InverseLerp(
+                        Systems_SimConstants.FUMBLE_CLOSING_SPEED,
+                        Systems_SimConstants.MAX_BODY_SPEED,
+                        message.ClosingSpeed)));
             }
+        }
+
+        /// <summary>
+        /// Puts a ripple in the next slot, in the turf shader's frame: yards from
+        /// the centre of the field, which is world metres over a yard.
+        /// </summary>
+        private void StartRipple(Vector2 point, float strength)
+        {
+            int slot = _nextRipple;
+            _nextRipple = (_nextRipple + 1) % RIPPLE_SLOTS;
+
+            if (_rippleStrength[slot] <= 0f)
+            {
+                _liveRipples++;
+            }
+
+            _rippleCentre[slot] = point / Systems_FieldModel.YARD;
+            _rippleAge[slot] = 0f;
+            _rippleStrength[slot] = strength;
+
+            TickRipples(0f);
+        }
+
+        /// <summary>
+        /// Grows every running ripple and fades it on a square, so the crest is
+        /// strongest leaving the pile and gone before it reaches anyone it could
+        /// be mistaken for hitting. One global write a frame while any is running,
+        /// none otherwise.
+        /// </summary>
+        private void TickRipples(float deltaTime)
+        {
+            for (int slot = 0; slot < RIPPLE_SLOTS; slot++)
+            {
+                if (_rippleStrength[slot] <= 0f)
+                {
+                    _ripples[slot] = Vector4.zero;
+                    continue;
+                }
+
+                _rippleAge[slot] += deltaTime;
+
+                float remaining = 1f - (_rippleAge[slot] / RIPPLE_SECONDS);
+
+                if (remaining <= 0f)
+                {
+                    _rippleStrength[slot] = 0f;
+                    _ripples[slot] = Vector4.zero;
+                    _liveRipples--;
+                    continue;
+                }
+
+                _ripples[slot] = new Vector4(
+                    _rippleCentre[slot].x,
+                    _rippleCentre[slot].y,
+                    _rippleAge[slot] * RIPPLE_SPEED_YARDS,
+                    _rippleStrength[slot] * remaining * remaining);
+            }
+
+            Shader.SetGlobalVectorArray(RipplesId, _ripples);
+        }
+
+        private void ClearRipples()
+        {
+            for (int slot = 0; slot < RIPPLE_SLOTS; slot++)
+            {
+                _ripples[slot] = Vector4.zero;
+                _rippleStrength[slot] = 0f;
+            }
+
+            _liveRipples = 0;
+            Shader.SetGlobalVectorArray(RipplesId, _ripples);
         }
 
         /// <summary>

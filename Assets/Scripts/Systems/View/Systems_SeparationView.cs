@@ -199,6 +199,7 @@ namespace PoFootball.Views
         /// <summary>LateUpdate so a ring drawn round a receiver lands on him this frame.</summary>
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             _vertices.Clear();
             _colors.Clear();
             _indices.Clear();

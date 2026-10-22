@@ -483,6 +483,7 @@ namespace PoFootball.Views
 
         private void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             TickWear();
 
             if (_particles == null)

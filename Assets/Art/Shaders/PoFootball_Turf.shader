@@ -169,6 +169,7 @@ Shader "PoFootball/Turf"
             half4 TurfFragment(Varyings input) : SV_Target
             {
                 half4 albedo = TurfAlbedo(input.uv) * input.color;
+                albedo.rgb = TurfRipples(albedo.rgb, input.uv);
                 albedo.rgb = TurfDownMarkers(albedo.rgb, input.uv);
 
                 SurfaceData2D surfaceData;
@@ -286,6 +287,7 @@ Shader "PoFootball/Turf"
             half4 UnlitFragment(Varyings input) : SV_Target
             {
                 half4 color = TurfAlbedo(input.uv) * input.color;
+                color.rgb = TurfRipples(color.rgb, input.uv);
                 color.rgb = TurfDownMarkers(color.rgb, input.uv);
                 return color;
             }

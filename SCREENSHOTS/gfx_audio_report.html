@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shading, Impact and Fit</title>
+<style>
+  :root { --bg: #0b0f0d; --surface: #161b18; --text: #f2f7f3; --muted: #9aa89f; --accent: #fbc938; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; color: var(--accent); }
+  p, li { color: var(--muted); }
+  code { color: var(--text); }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  figure { margin: 0; background: var(--surface); border-radius: 12px; padding: 12px; }
+  figure img { width: 100%; border-radius: 8px; display: block; }
+  figcaption { margin-top: 8px; color: var(--text); font-size: 14px; }
+  figcaption ul { margin: 6px 0 0; padding-left: 18px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #26302a; vertical-align: top; }
+  th { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Shading, impact, crowd and fit: before and after</h1>
+  <p>SCN_GAME, 1080×1920 Game view, scripted players, 2026-10-22. "Before" is the broadcast pass that
+  preceded this one (<code>broadcast_report.html</code>, commit e6ad467). EditMode 366/366 and PlayMode 26/26 pass.
+  Nothing here changes the simulation, so no contract revision.</p>
+
+  <h2>Layout: unchanged, except one unit that was wrong</h2>
+  <div class="pair">
+    <figure><img src="broadcast_after_6.png" alt="Previous pass">
+      <figcaption>Before: score row from 76, ribbon at 222, banner band at 276, each typed into two views.</figcaption></figure>
+    <figure><img src="gfx_audio/after_play_1.png" alt="This pass">
+      <figcaption>After: same stack, now from <code>Systems_HudLayout</code>.
+        <ul>
+          <li>The new score-row check fired on its first run: the row is <b>147</b> units, not 146, so the ribbon
+          had been one unit over it. Ribbon now at 223; the gap under it shrank by one, banner band still at 276.</li>
+          <li>Ticker and focus card share one dock (the ticker already hid itself while a player is focused).</li>
+        </ul></figcaption></figure>
+  </div>
+
+  <h2>1 · Relief toward the key light</h2>
+  <div class="pair">
+    <figure><img src="gfx_audio/crop_key_ne.png" alt="Key light north-east">
+      <figcaption>Key where the rig puts it, north-east. Upper-right rims catch it, lower-left fall into shade.</figcaption></figure>
+    <figure><img src="gfx_audio/crop_key_sw.png" alt="Key light mirrored">
+      <figcaption>Same paused frame with the key mirrored south-west: the lit and shaded rims swap. Before this pass
+      the bevel was lit from each sprite's own +Y, so it turned when the player turned.</figcaption></figure>
+  </div>
+
+  <h2>4 · Turf ripple on a hit that can strip the ball</h2>
+  <div class="pair">
+    <figure><img src="gfx_audio/crop_ripple.png" alt="First ripple, too faint">
+      <figcaption>First version, ripple logged at radius 2.6 yd, amplitude 0.61: not findable on the grass.</figcaption></figure>
+    <figure><img src="gfx_audio/crop_ripple_v2.png" alt="Tuned ripple">
+      <figcaption>Tuned (contrast 0.24 → 0.6, crest 0.7 → 1.1 yd): the lighter band about four yards out from the pile,
+      at half strength.</figcaption></figure>
+  </div>
+
+  <h2>7, 8, 10 · What the DEBUG sheet can now say</h2>
+  <div class="pair">
+    <figure><img src="gfx_audio/after_debug_final.png" alt="Debug sheet">
+      <figcaption>New readings:
+        <ul>
+          <li><b>fatigue load 59% drive, 27% steer, 14% contact</b>; a finding if contact ever stops loading fatigue.</li>
+          <li><b>bodies 22 checked, worst 0.0 cm</b>: drawn shape against collider.</li>
+          <li><b>effects 0.40 ms/frame</b>: every view's Update/LateUpdate under one marker; also in the telemetry file.</li>
+          <li><b>text 23 checked, 0 cut off, 0 overflowing, 0 scrolling, smallest 12.0 pt.</b></li>
+        </ul>
+        The three findings shown were there before this pass (heuristic players, D3D12 in the Editor, one hitch while
+        the bridge was polling).</figcaption></figure>
+    <figure><img src="gfx_audio/after_debug_1080x2400.png" alt="Debug sheet at 20:9">
+      <figcaption>1080×2400 (20:9): 35 text elements, 0 cut off / overflowing / scrolling. 1200×1920 (16:10) read the
+      same with smallest text 13.3 pt. This capture still shows the contact-spike finding that was then deleted —
+      it was counting ordinary tackles (see below).</figcaption></figure>
+  </div>
+
+  <h2>Everything, with the numbers</h2>
+  <table>
+    <tr><th>#</th><th>What</th><th>Measured</th></tr>
+    <tr><td>1</td><td>Relief toward the key light (<code>_Relief</code> 0.7)</td><td>Verified by mirroring the key; cannot exceed the bevel's centre, so bloom is untouched.</td></tr>
+    <tr><td>2</td><td>Tackle = pop + mass-weighted thud + pad crack at ≥ 6 m/s</td><td>Voice pool 4 → 6. No console errors.</td></tr>
+    <tr><td>3</td><td>Scrum bed from summed contacts</td><td>Peak volume 0.035 at the default effects level; open on about 3 frames in 4 at 4x.</td></tr>
+    <tr><td>4</td><td>Turf ripple, 4 shader slots</td><td>Peak amplitude 0.62; about 13 frames each at 4x.</td></tr>
+    <tr><td>5</td><td>Photographers' flashes, 60 per unit of win-probability swing</td><td>Up to 8 motes at once; SetPass unchanged with them on or off.</td></tr>
+    <tr><td>6</td><td>Home crowd roars or hushes with the swing</td><td>±3.2× swing on the bed's lift, fades over 3 s, floor at 0.35.</td></tr>
+    <tr><td>7</td><td>Load split and body fit</td><td>59/27/14; 22 bodies, 0.0 cm. Two "solver blow-up" detectors were built and deleted:
+      the fatigue cap is a body's own drive force (5.9% of ticks, honest blocks) and a tackle's one-tick impulse is
+      about 7× it (0.8%). The speed clamp already counts the real failure.</td></tr>
+    <tr><td>8</td><td>Fit audit</td><td>Clean at 1080×1920, 1080×2400, 1200×1920.</td></tr>
+    <tr><td>9</td><td><code>Systems_HudLayout</code></td><td>Found the 146 → 147 overlap above.</td></tr>
+    <tr><td>10</td><td>Presentation marker</td><td>0.15–0.40 ms/frame on this laptop; finding at 4 ms. Not yet read on a handset.</td></tr>
+  </table>
+  <p>SetPass alternates 139 / 278 in the Editor (the Game view drawn twice on some frames); 139 is the scene and
+  matches the 2026-10-02 measurement.</p>
+</main>
+</body>
+</html>

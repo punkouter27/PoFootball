@@ -448,6 +448,7 @@ namespace PoFootball.Views
         /// </summary>
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             float deltaTime = ShotDeltaTime();
 
             if (_highlightPlaying)

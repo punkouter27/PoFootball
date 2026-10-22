@@ -238,6 +238,7 @@ namespace PoFootball.Views
 
         private void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             if (_weather.Revision != _weatherRevision)
             {
                 _weatherRevision = _weather.Revision;
@@ -253,6 +254,7 @@ namespace PoFootball.Views
 
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             if (_condition == Systems_WeatherCondition.Clear
                 || _condition == Systems_WeatherCondition.Cloudy)
             {

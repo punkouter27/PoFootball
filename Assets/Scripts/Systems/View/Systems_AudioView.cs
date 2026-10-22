@@ -95,15 +95,88 @@ namespace PoFootball.Views
     ///   callback that fired anyway, like the block. It is not in the voice pool:
     ///   a loop that took a pooled voice would be cut off by the tackle it is
     ///   leading up to.
+    ///
+    /// AND IN THE IMPACT PASS (2026-10-22), STILL UNDER THAT TEST:
+    ///
+    ///   THE TACKLE IS THREE LAYERS, EACH ONE A NUMBER. The pop is the closing
+    ///   speed, as it always was. Under it a thud weighted by the tackler's
+    ///   mass — the one thing the pitch alone could only hint at — and over it a
+    ///   pad crack that plays only at the fumble threshold, so the hits that can
+    ///   strip the ball are the ones you hear crack. Two more voices in the pool,
+    ///   so a three-layer hit and the whistle after it do not steal from each other.
+    ///
+    ///   THE LINE IS A BED NOW, NOT ONLY A SERIES OF SHOVES. The block sound is
+    ///   still one rate-limited voice; under it one looping scrum opens with how
+    ///   much contact the solver has reported over the last half second — the
+    ///   same Systems_ContactMessage feed, folded into one leaky number — so the
+    ///   snap swells and the locked-up blocks settle. One float a message, one
+    ///   volume write a frame; nothing looks at a player.
+    ///
+    ///   THE CROWD REACTS TO WHAT THE PLAY DID TO THE GAME. Leverage is how big
+    ///   the coming down is; Systems_WinProbabilityModel.LastSwing is how much
+    ///   the last one mattered. This is the home crowd, so a play that helps the
+    ///   home team lifts the bed and one that hurts it hushes the stadium below
+    ///   its resting level, and either fades over a few seconds.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class Systems_AudioView : MonoBehaviour, Systems_IInjectableView
     {
         /// <summary>
-        /// Concurrent one-shot voices. Four is enough for the worst real overlap:
-        /// an impact, the whistle that follows it, and the result cue.
+        /// Concurrent one-shot voices. Six is the worst real overlap: a tackle's
+        /// three layers, the whistle that follows it, the result cue and a block.
         /// </summary>
-        private const int VOICE_COUNT = 4;
+        private const int VOICE_COUNT = 6;
+
+        /// <summary>
+        /// The thud at full weight, before the effects setting: the heaviest
+        /// tackler at the hardest closing speed. Under the pop, because it is the
+        /// low end of the same event and not a second one.
+        /// </summary>
+        private const float THUD_VOLUME = 0.6f;
+
+        /// <summary>
+        /// The pad crack at the fumble threshold and at the hardest hit. Never
+        /// silent once it plays: the threshold is the information.
+        /// </summary>
+        private const float CRACK_VOLUME_MIN = 0.35f;
+        private const float CRACK_VOLUME_MAX = 0.8f;
+
+        /// <summary>
+        /// The scrum at its loudest, before the effects setting. Under the block,
+        /// for the reason GRIND_VOLUME is: it lasts.
+        /// </summary>
+        private const float SCRUM_VOLUME = 0.2f;
+
+        /// <summary>
+        /// How much one contact at full strength opens the scrum, in units of its
+        /// full level. The line engaging is five or six contacts at about a third
+        /// strength inside a tick or two, which this puts near the top.
+        /// </summary>
+        private const float SCRUM_PER_CONTACT = 0.45f;
+
+        /// <summary>
+        /// Game seconds for the scrum to fall to a third once contacts stop being
+        /// reported. Game time: it is how long a block lasts, which is the
+        /// simulation's question.
+        /// </summary>
+        private const float SCRUM_DECAY_SECONDS = 0.6f;
+
+        /// <summary>
+        /// Crowd lift per unit of win-probability swing toward the home team. A
+        /// ten-point play is about a third more crowd on top of whatever leverage
+        /// put there.
+        /// </summary>
+        private const float CROWD_SWING_GAIN = 3.2f;
+
+        /// <summary>
+        /// The most a play can lift the crowd, and the most it can hush it — less
+        /// downward, so a disaster quiets the stadium without emptying it.
+        /// </summary>
+        private const float CROWD_REACTION_MAX = 1.1f;
+        private const float CROWD_REACTION_MIN = -0.55f;
+
+        /// <summary>Real seconds for a reaction to fade to a third.</summary>
+        private const float CROWD_REACTION_SECONDS = 3f;
 
         /// <summary>
         /// Distance at which a 3D voice is at full volume. Generous, because the
@@ -261,6 +334,27 @@ namespace PoFootball.Views
 
         private Systems_PresentationBudget _budget;
 
+        /// <summary>
+        /// Read for the last play's swing. Game-mode registration, like
+        /// <see cref="_game"/>; polled on its version, see <see cref="TickCrowdReaction"/>.
+        /// </summary>
+        private Systems_WinProbabilityModel _winProbability;
+        private int _winVersion = -1;
+
+        /// <summary>
+        /// The crowd's reaction to the last play, as an addition to its lift:
+        /// positive is a roar, negative a hush. Decays toward zero.
+        /// </summary>
+        private float _crowdReaction;
+
+        /// <summary>The line's bed, and how open it is in [0, 1].</summary>
+        private AudioSource _scrum;
+        private float _scrumEnergy;
+
+        /// <summary>Contact strength reported since Update last looked, summed.</summary>
+        private float _pendingScrum;
+        private Vector3 _pendingScrumPoint;
+
         private AudioSource[] _voices;
         private AudioSource _crowd;
         private int _nextVoice;
@@ -316,6 +410,8 @@ namespace PoFootball.Views
         private AudioClip _catch;
         private AudioClip _block;
         private AudioClip _cut;
+        private AudioClip _thud;
+        private AudioClip _crack;
 
         [Inject]
         public void Construct(
@@ -331,8 +427,10 @@ namespace PoFootball.Views
             Systems_PlayerRegistry registry,
             Systems_BallModel ball,
             Systems_GameModel game,
+            Systems_WinProbabilityModel winProbability,
             Systems_PresentationBudget budget)
         {
+            _winProbability = winProbability;
             _resolvedSubscriber = resolvedSubscriber;
             _tackleSubscriber = tackleSubscriber;
             _endedSubscriber = endedSubscriber;
@@ -364,6 +462,10 @@ namespace PoFootball.Views
             BuildVoices();
             BuildCrowdBed();
             BuildGrind();
+            BuildScrum();
+
+            // Only plays from here on are reacted to.
+            _winVersion = _winProbability == null ? -1 : _winProbability.Version;
 
             _grindSubscription = _grindSubscriber?.Subscribe(OnGrind);
             _resolvedSubscription = _resolvedSubscriber?.Subscribe(OnDownResolved);
@@ -406,8 +508,11 @@ namespace PoFootball.Views
         /// </summary>
         private void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             FlushContact();
             TickGrind();
+            TickScrum();
+            TickCrowdReaction();
 
             if (_cutCooldown > 0f)
             {
@@ -432,6 +537,10 @@ namespace PoFootball.Views
             {
                 lift += CROWD_FLIGHT_SWELL;
             }
+
+            // Floored, so the hush can never take the bed to silence: an empty
+            // stadium reads as a dropped sound, not as a quiet crowd.
+            lift = Mathf.Max(0.35f, lift + _crowdReaction);
 
             _crowdLift = Mathf.Lerp(
                 _crowdLift, lift, 1f - Mathf.Exp(-CROWD_LIFT_RATE * deltaTime));
@@ -469,6 +578,8 @@ namespace PoFootball.Views
             _catch = Systems_ToneBank.Catch();
             _block = Systems_ToneBank.Block();
             _cut = Systems_ToneBank.Cut();
+            _thud = Systems_ToneBank.Thud();
+            _crack = Systems_ToneBank.Crack();
         }
 
         /// <summary>
@@ -549,6 +660,97 @@ namespace PoFootball.Views
             _grind.spatialBlend = 1f;
             _grind.volume = 0f;
             _grind.Play();
+        }
+
+        /// <summary>
+        /// The line's bed, built like the grind: its own child, so it has a place
+        /// on the field, outside the pool, playing from the start at silence.
+        /// </summary>
+        private void BuildScrum()
+        {
+            GameObject holder = new GameObject("Scrum");
+            holder.transform.SetParent(transform, false);
+
+            _scrum = holder.AddComponent<AudioSource>();
+            _scrum.clip = Systems_ToneBank.Scrum();
+            _scrum.loop = true;
+            _scrum.playOnAwake = false;
+            _scrum.rolloffMode = AudioRolloffMode.Logarithmic;
+            _scrum.minDistance = VOICE_MIN_DISTANCE;
+            _scrum.maxDistance = VOICE_MAX_DISTANCE;
+            _scrum.spatialBlend = 1f;
+            _scrum.volume = 0f;
+            _scrum.Play();
+        }
+
+        /// <summary>
+        /// Folds the contacts reported since the last frame into the scrum's level
+        /// and lets it decay. The decay is game time and the level it is heard at
+        /// is a volume write, so a paused game holds the line where it is — and
+        /// is then silenced by the pause, as the grind is.
+        /// </summary>
+        private void TickScrum()
+        {
+            if (_scrum == null)
+            {
+                return;
+            }
+
+            if (_pendingScrum > 0f)
+            {
+                _scrumEnergy = Mathf.Min(1f, _scrumEnergy + (_pendingScrum * SCRUM_PER_CONTACT));
+                _pendingScrum = 0f;
+
+                // Toward the latest contact rather than onto it: the line is wide,
+                // and a source that jumped from tackle to guard would swing.
+                _scrum.transform.position = Vector3.Lerp(
+                    _scrum.transform.position, _pendingScrumPoint, 0.5f);
+            }
+
+            if (_scrumEnergy <= 0f)
+            {
+                return;
+            }
+
+            _scrumEnergy *= Mathf.Exp(-Time.deltaTime / SCRUM_DECAY_SECONDS);
+
+            if (_scrumEnergy < 0.01f || Time.timeScale <= 0f)
+            {
+                _scrumEnergy = Time.timeScale <= 0f ? _scrumEnergy : 0f;
+                _scrum.volume = 0f;
+                return;
+            }
+
+            _scrum.volume = Mathf.Clamp01(
+                SCRUM_VOLUME * _scrumEnergy * Systems_AudioSettings.EffectsBus);
+        }
+
+        /// <summary>
+        /// Picks up a new win-probability point and lets the reaction fade. The
+        /// fade is real time: a crowd's breath is not game time, and at Sim Speed
+        /// 8x a game-time roar would be a click.
+        /// </summary>
+        private void TickCrowdReaction()
+        {
+            if (_winProbability != null && _winProbability.Version != _winVersion)
+            {
+                _winVersion = _winProbability.Version;
+
+                _crowdReaction = Mathf.Clamp(
+                    _crowdReaction + (_winProbability.LastSwing * CROWD_SWING_GAIN),
+                    CROWD_REACTION_MIN,
+                    CROWD_REACTION_MAX);
+            }
+
+            if (_crowdReaction != 0f)
+            {
+                _crowdReaction *= Mathf.Exp(-Time.unscaledDeltaTime / CROWD_REACTION_SECONDS);
+
+                if (Mathf.Abs(_crowdReaction) < 0.005f)
+                {
+                    _crowdReaction = 0f;
+                }
+            }
         }
 
         // --- Event handlers ---------------------------------------------------
@@ -632,30 +834,51 @@ namespace PoFootball.Views
 
             Vector3 at = ContactPoint(message.CarrierId);
 
-            float pitch = (0.94f + (0.12f * force)) * TacklerPitch(message.TacklerId);
+            float heaviness = TacklerHeaviness(message.TacklerId);
+            float pitch = (0.94f + (0.12f * force))
+                * Mathf.Lerp(1f + TACKLER_MASS_PITCH, 1f - TACKLER_MASS_PITCH, heaviness);
 
             PlayAt(_impact, 0.45f + (0.55f * force), pitch, at);
+
+            // The body under it: mass AND speed, because a lineman who barely
+            // touched the carrier did not land on him. A floor of a quarter so
+            // the lightest tackler still has some low end.
+            PlayAt(
+                _thud, THUD_VOLUME * (0.25f + (0.75f * heaviness)) * (0.4f + (0.6f * force)),
+                1f, at);
+
+            if (message.ClosingSpeed >= Systems_SimConstants.FUMBLE_CLOSING_SPEED)
+            {
+                float over = Mathf.InverseLerp(
+                    Systems_SimConstants.FUMBLE_CLOSING_SPEED,
+                    Systems_SimConstants.MAX_BODY_SPEED,
+                    message.ClosingSpeed);
+
+                PlayAt(
+                    _crack, Mathf.Lerp(CRACK_VOLUME_MIN, CRACK_VOLUME_MAX, over),
+                    0.96f + (0.08f * over), at);
+            }
         }
 
         /// <summary>
-        /// Lower for a heavier tackler. The closing speed says how hard the two
-        /// met; it cannot say a lineman landed rather than a corner, and that is
-        /// a difference an ear hears as depth. 1 when the tackler cannot be
-        /// resolved, so a missing handle changes nothing.
+        /// Where the tackler sits between the lightest and the heaviest body, in
+        /// [0, 1]. The closing speed says how hard the two met; it cannot say a
+        /// lineman landed rather than a corner, and that is a difference an ear
+        /// hears as depth — in the pop's pitch and in the thud's weight. A half
+        /// when the tackler cannot be resolved, which leaves the pitch exactly
+        /// where it was before mass was read at all.
         /// </summary>
-        private float TacklerPitch(int tacklerId)
+        private float TacklerHeaviness(int tacklerId)
         {
             Systems_IPlayerHandle tackler = _registry == null ? null : _registry.FindById(tacklerId);
 
             if (tackler == null)
             {
-                return 1f;
+                return 0.5f;
             }
 
-            float heaviness = Mathf.InverseLerp(
+            return Mathf.InverseLerp(
                 LightestMass, HeaviestMass, Systems_RoleTable.MassOf(tackler.Role));
-
-            return Mathf.Lerp(1f + TACKLER_MASS_PITCH, 1f - TACKLER_MASS_PITCH, heaviness);
         }
 
         /// <summary>
@@ -709,6 +932,11 @@ namespace PoFootball.Views
         private void OnContact(Systems_ContactMessage message)
         {
             float strength = message.Strength;
+
+            // Every contact feeds the scrum, not only the hardest: the bed is how
+            // MUCH the line is hitting, which is a sum.
+            _pendingScrum += strength;
+            _pendingScrumPoint = new Vector3(message.Point.x, message.Point.y, 0f);
 
             if (strength <= _pendingContactStrength)
             {

@@ -242,5 +242,38 @@ namespace PoFootball.Tests
             Assert.That(health.PlayersReported, Is.EqualTo(2));
             Assert.That(health.PlayersWithBrain, Is.EqualTo(1));
         }
+
+        [Test]
+        public void Health_SplitsFatigueLoadBySource()
+        {
+            Systems_SimHealthModel health = new Systems_SimHealthModel();
+
+            // A braced lineman: almost no drive, mostly contact.
+            health.RecordLoad(0.1f, 0f, 0.9f);
+            health.RecordLoad(0.1f, 0f, 0.9f);
+
+            Assert.That(health.LoadTicks, Is.EqualTo(2));
+            Assert.That(health.ContactShare, Is.EqualTo(0.9f).Within(0.0001f));
+        }
+
+        [Test]
+        public void Health_ReadsNoContactShareBeforeAnyLoad()
+        {
+            Systems_SimHealthModel health = new Systems_SimHealthModel();
+
+            Assert.That(health.ContactShare, Is.EqualTo(0f));
+        }
+
+        [Test]
+        public void Health_KeepsTheWorstBodyFitAndWhoItWas()
+        {
+            Systems_SimHealthModel health = new Systems_SimHealthModel();
+
+            health.ReportBodyFit(22, 0.12f, "Offense OffensiveLine");
+
+            Assert.That(health.BodiesChecked, Is.EqualTo(22));
+            Assert.That(health.WorstBodyMismatch, Is.EqualTo(0.12f).Within(0.0001f));
+            Assert.That(health.WorstBodyName, Is.EqualTo("Offense OffensiveLine"));
+        }
     }
 }

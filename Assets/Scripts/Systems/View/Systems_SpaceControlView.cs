@@ -234,6 +234,7 @@ namespace PoFootball.Views
 
         private void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             bool live = _play.Phase == Systems_PlayPhase.Live;
             bool wanted = live && Systems_BroadcastSettings.SpaceControl;
 
@@ -270,6 +271,7 @@ namespace PoFootball.Views
 
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             if (!_jobPending)
             {
                 return;

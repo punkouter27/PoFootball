@@ -115,6 +115,7 @@ namespace PoFootball.Views
 
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             if (_trail == null)
             {
                 return;

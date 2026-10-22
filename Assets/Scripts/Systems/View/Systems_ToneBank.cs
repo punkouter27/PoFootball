@@ -19,7 +19,8 @@ namespace PoFootball.Views
     /// Nothing here allocates after Build — clips are created once and reused.
     /// </summary>
     /// <remarks>
-    /// Eight cues, one bed, one UI tick, and the synthesis primitives. A second
+    /// Eight cues, two layers under the tackle (Thud, Crack), one bed, two
+    /// held loops (Grind, Scrum), one UI tick, and the synthesis primitives. A second
     /// file once extended this with crowd layers, cue variants, an organ and a PA;
     /// it was three times the size of this one and none of it told a viewer
     /// anything about the game, so it is gone. Keep additions here to sounds that
@@ -71,6 +72,94 @@ namespace PoFootball.Views
                 float thump = Mathf.Sin(2f * Mathf.PI * 90f * t) * Mathf.Exp(-22f * t);
 
                 return envelope * 0.55f * ((lowPassState * 0.8f) + (thump * 0.6f));
+            });
+        }
+
+        /// <summary>
+        /// The body under a tackle: the low end the pop leaves out, played UNDER
+        /// it and weighted by the tackler's mass. A 140 kg lineman landing is a
+        /// thud you feel; a 92 kg corner is barely there. A sine sweeping down
+        /// from 70 to 40 Hz — the floor going out of a chest — over noise with the
+        /// filter almost shut, and nothing above a few hundred hertz, so it adds
+        /// weight to the pop and never a second attack.
+        /// </summary>
+        public static AudioClip Thud()
+        {
+            System.Random random = new System.Random(20261022);
+            float lowPassState = 0f;
+            float phase = 0f;
+
+            return Build("Thud", 0.3f, (t, duration) =>
+            {
+                float envelope = Attack(t, 0.004f) * Release(t, duration, 0.24f);
+
+                float frequency = Mathf.Lerp(70f, 40f, t / duration);
+                phase += frequency / SAMPLE_RATE;
+                float body = Mathf.Sin(2f * Mathf.PI * phase) * Mathf.Exp(-9f * t);
+
+                float noise = (float)((random.NextDouble() * 2.0) - 1.0);
+                lowPassState += (noise - lowPassState) * 0.03f;
+
+                return envelope * 0.9f * ((body * 0.8f) + (lowPassState * 2.2f));
+            });
+        }
+
+        /// <summary>
+        /// Pads and helmets cracking on a hit hard enough to strip the ball: a
+        /// transient a twentieth of a second long, all top end, with a hard
+        /// knock in it. It plays ONLY at Systems_SimConstants.FUMBLE_CLOSING_SPEED
+        /// and above — the threshold Systems_ImpactView's ring, its turf ripple
+        /// and Systems_PostProcessView's lens pulse share — so a viewer who hears
+        /// it is hearing the fumble model's dice being picked up. Every ordinary
+        /// tackle stays the pop and the thud.
+        /// </summary>
+        public static AudioClip Crack()
+        {
+            System.Random random = new System.Random(20261023);
+            float lowPassState = 0f;
+
+            return Build("Crack", 0.07f, (t, duration) =>
+            {
+                float envelope = Attack(t, 0.0005f) * Release(t, duration, 0.06f);
+
+                float noise = (float)((random.NextDouble() * 2.0) - 1.0);
+                lowPassState += (noise - lowPassState) * 0.3f;
+
+                float knock = Mathf.Sin(2f * Mathf.PI * 1750f * t) * Mathf.Exp(-90f * t);
+
+                return envelope * 0.55f * (((noise - lowPassState) * 0.9f) + (knock * 0.6f));
+            });
+        }
+
+        /// <summary>
+        /// The line engaged, as one sustained noise: eleven bodies leaning on
+        /// eleven others. Looping, held at silence by Systems_AudioView and opened
+        /// by how much contact the solver has been reporting, so it swells at the
+        /// snap and settles as the blocks lock up. Lower and slower than the
+        /// grind — the grind is two bodies sliding, this is a wall pushing — with
+        /// an uneven grunt in the amplitude so it reads as people and not as wind.
+        /// </summary>
+        public static AudioClip Scrum()
+        {
+            System.Random random = new System.Random(20261024);
+            float low = 0f;
+            float lower = 0f;
+
+            return Build("Scrum", 3.2f, (t, duration) =>
+            {
+                float noise = (float)((random.NextDouble() * 2.0) - 1.0);
+
+                low += (noise - low) * 0.05f;
+                lower += (low - lower) * 0.012f;
+
+                // Rates chosen not to divide the loop, so the grunts never line up
+                // the same way twice in a row.
+                float grunt = 0.6f + (0.25f * Mathf.Abs(Mathf.Sin(2f * Mathf.PI * 2.7f * t)))
+                    + (0.15f * Mathf.Sin(2f * Mathf.PI * 6.1f * t));
+
+                float seam = Mathf.Min(1f, Mathf.Min(t, duration - t) / 0.2f);
+
+                return (low - (lower * 0.6f)) * 2.4f * grunt * seam;
             });
         }
 

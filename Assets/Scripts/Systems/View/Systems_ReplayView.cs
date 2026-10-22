@@ -215,6 +215,7 @@ namespace PoFootball.Views
         /// </summary>
         protected override void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             base.Update();
 
             if (_reel == null)
@@ -240,6 +241,7 @@ namespace PoFootball.Views
         /// </summary>
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             if (_highlightOnField)
             {
                 _ghosts.EnforceHidden();

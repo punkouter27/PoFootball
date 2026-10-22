@@ -50,9 +50,10 @@ namespace PoFootball.Views
     ///
     /// IT CAN SAY WHERE THE TIME WENT, NOT ONLY THAT IT WENT. "Below target" used
     /// to end with "it is rendering or simulation load", which is the question,
-    /// not the answer. Six ProfilerRecorders settle it: the render counters say
-    /// how much was drawn, and two player-loop timers say what a physics tick
-    /// costs before anything is drawn at all. They are read by the engine, not
+    /// not the answer. ProfilerRecorders settle it: the render counters say
+    /// how much was drawn, two player-loop timers say what a physics tick
+    /// costs before anything is drawn at all, and Systems_PresentationProfiler's
+    /// marker says what the decoration's own scripts cost a frame. They are read by the engine, not
     /// sampled here, so they add nothing to the per-frame path above.
     ///
     /// EVERY ONE OF THOSE NAMES WAS READ OFF THE RUNNING EDITOR, and two of the
@@ -137,6 +138,24 @@ namespace PoFootball.Views
         /// </summary>
         private const int SET_PASS_BUDGET = 280;
 
+        /// <summary>
+        /// What the presentation views may cost a frame, in milliseconds, before
+        /// it is a finding: a quarter of a 60 FPS frame. Every effect is optional
+        /// decoration on a simulation, and past this the decoration is a large
+        /// enough share of the frame to be the reason a device misses 60.
+        /// </summary>
+        private const float PRESENTATION_BUDGET_MS = 4f;
+
+        /// <summary>Plays before "fatigue never saw a contact" can be a finding: the line has engaged by then.</summary>
+        private const int MIN_PLAYS_FOR_LOAD = 3;
+
+        /// <summary>
+        /// Smallest text, in typographic points on the device, below which the
+        /// sheet says it is too small to read at arm's length. Android's own
+        /// floor for body text is about 9 sp; this is lower, for captions.
+        /// </summary>
+        private const float SMALLEST_LEGIBLE_POINTS = 6.5f;
+
         /// <summary>A timer that has no reading yet, or no marker to read.</summary>
         private const float NO_READING = -1f;
 
@@ -184,6 +203,15 @@ namespace PoFootball.Views
         private ProfilerRecorder _batcherDraws;
         private ProfilerRecorder _agentStep;
         private ProfilerRecorder _physicsStep;
+
+        /// <summary>Every presentation view's per-frame work. See Systems_PresentationProfiler.</summary>
+        private ProfilerRecorder _presentation;
+
+        /// <summary>
+        /// The last fit audit of the screen's text, run while the sheet is open
+        /// and read by both the findings and the readings under them.
+        /// </summary>
+        private Systems_UiFitAudit.Result _fit;
 
         /// <summary>
         /// Managed bytes allocated in each frame, summed into <see cref="_gcBytesInWindow"/>
@@ -655,6 +683,8 @@ namespace PoFootball.Views
 
         private void RefreshSheet(float median, float p99, long monoHeap)
         {
+            _fit = Systems_UiFitAudit.Run();
+
             int count = Diagnose(median, p99, monoHeap);
             SortFindings(count);
 
@@ -751,6 +781,21 @@ namespace PoFootball.Views
                     + "setting gets it back. If a trained brain is loaded this is "
                     + "inference; if not, it is the heuristic.");
             }
+
+            ReadTimer(_presentation, out _, out float presentationMs);
+
+            if (presentationMs > PRESENTATION_BUDGET_MS)
+            {
+                Add(ref count, 52,
+                    "The broadcast graphics and effects cost " + Fixed(presentationMs, 1)
+                    + " ms of every frame in their own scripts, before anything is "
+                    + "drawn — more than a quarter of the 16.7 ms budget. Switch the "
+                    + "features off one at a time in SETTINGS > BROADCAST and watch "
+                    + "this number to find which; a Profiler capture of the "
+                    + "PoFootball.Presentation marker shows them by script.");
+            }
+
+            DiagnoseScreenFit(ref count);
 
             long setPass = Reading(_setPassCalls);
 
@@ -912,6 +957,8 @@ namespace PoFootball.Views
                     + "this rate.");
             }
 
+            DiagnoseBodies(ref count);
+
             bool yardsJudged = _health.ScrimmagePlays >= MIN_PLAYS_FOR_REALISM;
             bool drivesJudged = _health.Drives >= MIN_DRIVES_FOR_REALISM;
 
@@ -933,6 +980,83 @@ namespace PoFootball.Views
                     + " touchdowns a drive over " + _health.Drives + " drives (0.15 "
                     + "to 0.40 passes). One game is noisy — judge a rules change on "
                     + "Tools > PoFootball > Evaluate Realism, not on this line.");
+            }
+        }
+
+        /// <summary>
+        /// Whether the bodies are what the rules think they are: drawn the size of
+        /// the collider the tackle rule measures, and tired by what actually
+        /// pushed on them. Two claims CLAUDE.md makes about the physics model that
+        /// nothing checked at run time until these sums existed.
+        /// </summary>
+        private void DiagnoseBodies(ref int count)
+        {
+            if (_health.BodiesChecked > 0
+                && _health.WorstBodyMismatch > Systems_RoleShapeApplier.BODY_FIT_TOLERANCE)
+            {
+                Add(ref count, 58,
+                    "A player is drawn " + Fixed(_health.WorstBodyMismatch * 100f, 0)
+                    + " cm off the size of the body that collides (" + _health.WorstBodyName
+                    + "), so the picture lies about where contact happens. Shape sprites "
+                    + "must import at 256 pixels per unit and the player must stay at "
+                    + "scale 1 — see Systems_RoleShapeApplier.");
+            }
+
+            if (_health.ScrimmagePlays >= MIN_PLAYS_FOR_LOAD && _health.LoadTicks > 0
+                && _health.ContactLoad <= 0.0)
+            {
+                Add(ref count, 66,
+                    "Fatigue has not been loaded by a single contact in "
+                    + _health.ScrimmagePlays + " plays. Since revision 12 the impulse the "
+                    + "solver resolves against a body is a third load term, so a braced "
+                    + "lineman tires; reading zero means OnCollision is no longer feeding "
+                    + "Agent_FootballPlayer.AccumulateFatigue, and the fatigue every "
+                    + "brain observes is not the fatigue it was trained on.");
+            }
+        }
+
+        /// <summary>
+        /// Whether what is on screen fits it (CLAUDE.md section 3): no text cut
+        /// off by an edge or running out of its box, nothing that scrolls, and
+        /// type a person can read on this display.
+        /// </summary>
+        private void DiagnoseScreenFit(ref int count)
+        {
+            if (_fit.CutOff > 0)
+            {
+                Add(ref count, 62,
+                    _fit.CutOff + " piece" + (_fit.CutOff == 1 ? " of text runs" : "s of text run")
+                    + " off the edge of the screen — first \"" + _fit.CutOffExample
+                    + "\". The panel scales on width, so on this device's aspect something "
+                    + "is positioned past the bottom or side. Offset it from "
+                    + "Systems_HudLayout's slots rather than by a fixed distance.");
+            }
+
+            if (_fit.Scrolling > 0)
+            {
+                Add(ref count, 58,
+                    "A screen scrolls (" + _fit.ScrollingScreen + "): its content is taller "
+                    + "than the space it has. Every screen is meant to fit one portrait "
+                    + "screen; cut or tab the content instead.");
+            }
+
+            if (_fit.Overflowing > 0)
+            {
+                Add(ref count, 56,
+                    _fit.Overflowing + " single-line label" + (_fit.Overflowing == 1 ? " is" : "s are")
+                    + " wider than the box given to "
+                    + (_fit.Overflowing == 1 ? "it" : "them") + " — first \""
+                    + _fit.OverflowExample + "\" — so it runs into its neighbour. Shorten "
+                    + "the text or let the label wrap.");
+            }
+
+            if (_fit.SmallestPoints > 0f && _fit.SmallestPoints < SMALLEST_LEGIBLE_POINTS)
+            {
+                Add(ref count, 34,
+                    "The smallest text on screen (\"" + _fit.SmallestExample + "\") is "
+                    + Fixed(_fit.SmallestPoints, 1) + " pt on this display, too small to "
+                    + "read at arm's length. Systems_UiTheme.TEXT_CAPTION is the floor; "
+                    + "nothing should be set below it.");
             }
         }
 
@@ -969,18 +1093,63 @@ namespace PoFootball.Views
             builder.Append("   |   seed ");
             builder.Append(Systems_EpisodeSeed.Value);
             builder.Append('\n');
+
+            double load = _health.DriveLoad + _health.SteerLoad + _health.ContactLoad;
+
+            builder.Append("fatigue load ");
+
+            if (load > 0.0)
+            {
+                AppendFixed(builder, (float)(_health.DriveLoad / load * 100.0), 0);
+                builder.Append("% drive, ");
+                AppendFixed(builder, (float)(_health.SteerLoad / load * 100.0), 0);
+                builder.Append("% steer, ");
+                AppendFixed(builder, _health.ContactShare * 100f, 0);
+                builder.Append("% contact");
+            }
+            else
+            {
+                builder.Append("n/a");
+            }
+
+            builder.Append("   |   bodies ");
+            builder.Append(_health.BodiesChecked);
+            builder.Append(" checked, worst ");
+            AppendFixed(builder, _health.WorstBodyMismatch * 100f, 1);
+            builder.Append(" cm\n");
         }
 
+        /// <summary>
+        /// Adds a finding. When the sheet is full the new one displaces the least
+        /// severe, if it is worse: it used to be dropped, so whichever six were
+        /// diagnosed FIRST were shown, and the order of the checks in Diagnose —
+        /// not their severity — decided what a full sheet left out.
+        /// </summary>
         private void Add(ref int count, int severity, string text)
         {
-            if (count >= MAX_FINDINGS)
+            if (count < MAX_FINDINGS)
             {
+                _findings[count].Severity = severity;
+                _findings[count].Text = text;
+                count++;
                 return;
             }
 
-            _findings[count].Severity = severity;
-            _findings[count].Text = text;
-            count++;
+            int weakest = 0;
+
+            for (int index = 1; index < count; index++)
+            {
+                if (_findings[index].Severity < _findings[weakest].Severity)
+                {
+                    weakest = index;
+                }
+            }
+
+            if (severity > _findings[weakest].Severity)
+            {
+                _findings[weakest].Severity = severity;
+                _findings[weakest].Text = text;
+            }
         }
 
         /// <summary>
@@ -1107,6 +1276,7 @@ namespace PoFootball.Views
 
             _agentStep = StartTimer(AGENT_STEP_MARKER);
             _physicsStep = StartTimer(PHYSICS_STEP_MARKER);
+            _presentation = StartTimer(Systems_PresentationProfiler.MARKER_NAME);
 
             // THE ALLOCATION RATE IS READ FROM THE PROFILER, NOT FROM THE HEAP. It
             // used to be the growth of Profiler.GetMonoUsedSizeLong between refreshes,
@@ -1131,6 +1301,7 @@ namespace PoFootball.Views
             _batcherDraws.Dispose();
             _agentStep.Dispose();
             _physicsStep.Dispose();
+            _presentation.Dispose();
             _gcAllocated.Dispose();
         }
 
@@ -1253,10 +1424,35 @@ namespace PoFootball.Views
             ReadTimer(_agentStep, out float agentStepMs, out _);
             ReadTimer(_physicsStep, out float physicsStepMs, out _);
 
+            ReadTimer(_presentation, out _, out float presentationMs);
+
             builder.Append("per tick: agents ");
             AppendMilliseconds(builder, agentStepMs);
             builder.Append("   |   physics ");
             AppendMilliseconds(builder, physicsStepMs);
+            builder.Append("   |   effects ");
+            AppendMilliseconds(builder, presentationMs);
+            builder.Append("/frame\n");
+
+            builder.Append("text ");
+            builder.Append(_fit.TextChecked);
+            builder.Append(" checked, ");
+            builder.Append(_fit.CutOff);
+            builder.Append(" cut off, ");
+            builder.Append(_fit.Overflowing);
+            builder.Append(" overflowing, ");
+            builder.Append(_fit.Scrolling);
+            builder.Append(" scrolling   |   smallest ");
+
+            if (_fit.SmallestPoints > 0f)
+            {
+                AppendFixed(builder, _fit.SmallestPoints, 1);
+                builder.Append(" pt");
+            }
+            else
+            {
+                builder.Append("n/a (no DPI)");
+            }
         }
 
         private static void AppendMilliseconds(StringBuilder builder, float milliseconds)
@@ -1362,8 +1558,11 @@ namespace PoFootball.Views
                 ReadTimer(_agentStep, out float agentStepMs, out _);
                 ReadTimer(_physicsStep, out float physicsStepMs, out _);
 
+                ReadTimer(_presentation, out _, out float presentationMs);
+
                 AppendNumber(json, "agentStepMs", Fixed(agentStepMs, 3));
                 AppendNumber(json, "physicsStepMs", Fixed(physicsStepMs, 3));
+                AppendNumber(json, "presentationMsPerFrame", Fixed(presentationMs, 3));
                 AppendNumber(json, "drawCalls",
                     DrawCalls().ToString(CultureInfo.InvariantCulture));
                 AppendNumber(json, "setPassCalls",

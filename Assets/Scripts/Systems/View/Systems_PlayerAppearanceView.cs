@@ -283,6 +283,7 @@ namespace PoFootball.Views
         /// </summary>
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             float chase = 1f - Mathf.Exp(-STATE_CHASE_RATE * Time.deltaTime);
             float carrierChase = 1f - Mathf.Exp(-CARRIER_CHASE_RATE * Time.deltaTime);
             float impactDecay = IMPACT_DECAY_RATE * Time.deltaTime;

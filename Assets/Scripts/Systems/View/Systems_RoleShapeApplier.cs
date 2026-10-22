@@ -56,7 +56,15 @@ namespace PoFootball.Views
         [Tooltip("Leave empty to load the shared set from Resources.")]
         [SerializeField] private Systems_RoleShapeSet _shapeSet;
 
+        /// <summary>
+        /// A drawn body further than this from its collider's diameter, in metres,
+        /// is a finding on the DEBUG sheet. Five centimetres is about a pixel and
+        /// a half at the broadcast camera's tightest framing.
+        /// </summary>
+        public const float BODY_FIT_TOLERANCE = 0.05f;
+
         private Systems_GameModel _game;
+        private Systems_SimHealthModel _health;
         private ISubscriber<Systems_DownResolvedMessage> _resolvedSubscriber;
         private IDisposable _resolvedSubscription;
 
@@ -73,9 +81,11 @@ namespace PoFootball.Views
         [Inject]
         public void Construct(
             Systems_GameModel game,
+            Systems_SimHealthModel health,
             ISubscriber<Systems_DownResolvedMessage> resolvedSubscriber)
         {
             _game = game;
+            _health = health;
             _resolvedSubscriber = resolvedSubscriber;
         }
 
@@ -88,6 +98,67 @@ namespace PoFootball.Views
             // registers the flow system as an entry point. Painting here rather than
             // in Awake is what makes the kickoff colours correct on frame one.
             RepaintForPossession();
+            CheckBodyFit();
+        }
+
+        /// <summary>
+        /// Measures the promise in the class note — a shape at scale 1 is exactly
+        /// as big as the body that collides — against what was actually painted,
+        /// and hands the worst case to the DEBUG sheet. Once, at Start: the shapes
+        /// never change after Awake, and neither does a collider.
+        ///
+        /// The sprite's own bounds, not its renderer's: the renderer's are world
+        /// space and grow with the body's rotation, and a square turned 45 degrees
+        /// is not a bigger square. The shader's lean and breathing only ever draw
+        /// a body smaller, and are not counted.
+        /// </summary>
+        private void CheckBodyFit()
+        {
+            if (_health == null)
+            {
+                return;
+            }
+
+            int checkedCount = 0;
+            float worst = 0f;
+            string worstName = string.Empty;
+
+            for (int index = 0; index < _handleCount; index++)
+            {
+                if (!(_handles[index] is MonoBehaviour behaviour)
+                    || !behaviour.TryGetComponent(out SpriteRenderer renderer)
+                    || renderer.sprite == null)
+                {
+                    continue;
+                }
+
+                CircleCollider2D body = behaviour.GetComponentInChildren<CircleCollider2D>();
+
+                if (body == null)
+                {
+                    continue;
+                }
+
+                Vector3 spriteScale = renderer.transform.lossyScale;
+                Vector3 bodyScale = body.transform.lossyScale;
+
+                Vector3 spriteSize = renderer.sprite.bounds.size;
+                float drawn = Mathf.Max(
+                    spriteSize.x * Mathf.Abs(spriteScale.x), spriteSize.y * Mathf.Abs(spriteScale.y));
+                float collides = body.radius * 2f
+                    * Mathf.Max(Mathf.Abs(bodyScale.x), Mathf.Abs(bodyScale.y));
+
+                float mismatch = Mathf.Abs(drawn - collides);
+                checkedCount++;
+
+                if (mismatch > worst)
+                {
+                    worst = mismatch;
+                    worstName = _handles[index].Side + " " + _handles[index].Role;
+                }
+            }
+
+            _health.ReportBodyFit(checkedCount, worst, worstName);
         }
 
         private void OnDestroy()

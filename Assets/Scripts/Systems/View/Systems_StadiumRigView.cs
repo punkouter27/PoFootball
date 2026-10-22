@@ -231,6 +231,25 @@ namespace PoFootball.Views
         [Range(0f, 0.4f)]
         [SerializeField] private float _spotIntensity = 0.12f;
 
+        // THE THIRD EXCEPTION, AND IT IS OFF THE FIELD. Photographers along the
+        // sidelines and behind the end zone fire when a play changes the game:
+        // a burst sized by how far the play moved the win probability, read off
+        // Systems_WinProbabilityModel, which already priced the play. Each flash
+        // is a single additive mote for under a tenth of a second, outside the
+        // lines where no jersey or yard line sits, so no pixel a viewer reads
+        // the play from gets brighter. No Light2D — a light per flash would be a
+        // mesh and a pass each, for something two pixels wide.
+        [Header("Photographers")]
+        [Tooltip(
+            "Flashes per unit of win-probability swing. 60 puts three flashes on a "
+            + "five-point play and twelve on a twenty-point one. Zero builds none.")]
+        [Min(0f)]
+        [SerializeField] private float _flashesPerSwing = 60f;
+
+        [Tooltip("Most flashes one play can set off.")]
+        [Range(0, 24)]
+        [SerializeField] private int _maxFlashes = 18;
+
         [Tooltip("Fully-bright core of the spot, in metres. About the carrier and one blocker.")]
         [SerializeField] private float _spotInnerRadius = 1.5f;
 
@@ -333,6 +352,65 @@ namespace PoFootball.Views
         /// <summary>Real seconds into the current flash; negative when none is running.</summary>
         private float _flashElapsed = -1f;
 
+        /// <summary>
+        /// Where the shaders find the casting key: xy its world position, w 1.
+        /// PoFootball/Player turns each body's bevel toward it, so the lit side of
+        /// a player and the shadow he throws agree. Cleared on destroy so the menu
+        /// and the training scene fall back to the unlit default.
+        /// </summary>
+        private static readonly int KeyLightId = Shader.PropertyToID("_PoFootballKeyLight");
+
+        /// <summary>
+        /// Real seconds over which one play's flashes are spread: photographers
+        /// do not fire on the same frame, and a burst that did would read as one
+        /// light blinking.
+        /// </summary>
+        private const float PHOTO_BURST_SECONDS = 1.3f;
+
+        /// <summary>Least win-probability swing that sets anyone off.</summary>
+        private const float PHOTO_MIN_SWING = 0.02f;
+
+        /// <summary>Real seconds a flash is visible. Under a tenth: a flashbulb, not a lamp.</summary>
+        private const float PHOTO_FLASH_SECONDS = 0.09f;
+
+        /// <summary>The hot core, and the soft halo emitted with it, in metres.</summary>
+        private const float PHOTO_CORE_SIZE = 0.8f;
+        private const float PHOTO_HALO_SIZE = 2.6f;
+
+        /// <summary>
+        /// How far either way along the sideline from the ball the photographers
+        /// are, in metres: they follow the play.
+        /// </summary>
+        private const float PHOTO_SPREAD = 14f;
+
+        /// <summary>
+        /// Distance from a goal line inside which some of them are behind the end
+        /// zone instead, in metres.
+        /// </summary>
+        private const float PHOTO_END_ZONE_REACH = 15f;
+
+        /// <summary>Sorting order: over the surround and the turf, under nothing that matters.</summary>
+        private const int PHOTO_SORTING_ORDER = 6;
+
+        private static readonly Color PhotoCoreColor = new Color(1f, 1f, 1f, 1f);
+        private static readonly Color PhotoHaloColor = new Color(0.85f, 0.9f, 1f, 0.28f);
+
+        private Systems_WinProbabilityModel _winProbability;
+        private int _winVersion = -1;
+
+        private ParticleSystem _photographers;
+        private ParticleSystem.EmitParams _photoEmit;
+
+        /// <summary>
+        /// Real seconds until each pending flash fires; negative when the slot is
+        /// free. Pre-allocated, sized to the most a play can ask for.
+        /// </summary>
+        private readonly float[] _pendingFlashes = new float[24];
+        private int _pendingFlashCount;
+
+        /// <summary>Xorshift32, for the same reason Systems_ImpactView keeps its own.</summary>
+        private uint _noise = 0x2545F491u;
+
         [Inject]
         public void Construct(
             Systems_PresentationBudget budget,
@@ -340,8 +418,10 @@ namespace PoFootball.Views
             Systems_GameModel game,
             Systems_BallModel ball,
             Systems_WeatherModel weather,
+            Systems_WinProbabilityModel winProbability,
             ISubscriber<Systems_ScoreMessage> scoreSubscriber)
         {
+            _winProbability = winProbability;
             _weather = weather;
             _ball = ball;
             _budget = budget;
@@ -367,6 +447,7 @@ namespace PoFootball.Views
             DimExistingAmbient();
             BuildBanks();
             BuildSpot();
+            BuildPhotographers();
 
             if (_castPlayerShadows)
             {
@@ -389,6 +470,8 @@ namespace PoFootball.Views
         {
             _scoreSubscription?.Dispose();
             _scoreSubscription = null;
+
+            Shader.SetGlobalVector(KeyLightId, Vector4.zero);
         }
 
         /// <summary>
@@ -402,8 +485,10 @@ namespace PoFootball.Views
         /// </summary>
         private void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             TickScoreFlash();
             AimSpot();
+            TickPhotographers();
 
             bool weatherMoved = TickWeather();
 
@@ -674,6 +759,198 @@ namespace PoFootball.Views
                 castsShadows: true);
 
             _key = _banks[_banks.Count - 1];
+
+            Vector3 keyWorld = _key.transform.position;
+            Shader.SetGlobalVector(KeyLightId, new Vector4(keyWorld.x, keyWorld.y, 0f, 1f));
+        }
+
+        /// <summary>
+        /// One particle system for every photographer in the stadium, emitted at
+        /// world positions like Systems_ImpactView's, and looping for the reason
+        /// that view gives: a stopped system does not simulate what Emit injects.
+        /// </summary>
+        private void BuildPhotographers()
+        {
+            if (_winProbability == null || _ball == null || _flashesPerSwing <= 0f || _maxFlashes <= 0)
+            {
+                return;
+            }
+
+            if (!Systems_ParticleMaterial.TryLoad(
+                    nameof(Systems_StadiumRigView), "No photographers' flashes.", out Material source))
+            {
+                return;
+            }
+
+            GameObject host = new GameObject("Photographers");
+            host.transform.SetParent(transform, false);
+
+            _photographers = host.AddComponent<ParticleSystem>();
+
+            ParticleSystem.MainModule main = _photographers.main;
+            main.loop = true;
+            main.playOnAwake = false;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.maxParticles = 64;
+            main.startSpeed = 0f;
+            main.startLifetime = PHOTO_FLASH_SECONDS;
+            main.gravityModifier = 0f;
+
+            // Real time, like the touchdown flash: a flashbulb is not game time,
+            // and at Sim Speed 8x a game-time flash would last one frame.
+            main.useUnscaledTime = true;
+
+            ParticleSystem.EmissionModule emission = _photographers.emission;
+            emission.enabled = false;
+
+            ParticleSystem.ShapeModule shape = _photographers.shape;
+            shape.enabled = false;
+
+            ParticleSystem.ColorOverLifetimeModule fade = _photographers.colorOverLifetime;
+            fade.enabled = true;
+
+            Gradient gradient = new Gradient();
+            gradient.SetKeys(
+                new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
+                new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(0f, 1f) });
+            fade.color = new ParticleSystem.MinMaxGradient(gradient);
+
+            ParticleSystemRenderer renderer = host.GetComponent<ParticleSystemRenderer>();
+            renderer.sharedMaterial = source;
+            renderer.sortingOrder = PHOTO_SORTING_ORDER;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.alignment = ParticleSystemRenderSpace.View;
+
+            _photographers.Play();
+
+            for (int slot = 0; slot < _pendingFlashes.Length; slot++)
+            {
+                _pendingFlashes[slot] = -1f;
+            }
+
+            // The game in progress has a history; only plays from here on flash.
+            _winVersion = _winProbability.Version;
+        }
+
+        /// <summary>
+        /// Queues a burst when the win probability moves and fires what is due.
+        /// Polled on the model's version, like the ribbon, so it does not matter
+        /// in what order this and Systems_WinProbabilitySystem hear the down.
+        /// </summary>
+        private void TickPhotographers()
+        {
+            if (_photographers == null)
+            {
+                return;
+            }
+
+            if (_winProbability.Version != _winVersion)
+            {
+                _winVersion = _winProbability.Version;
+                QueueFlashes(Mathf.Abs(_winProbability.LastSwing));
+            }
+
+            if (_pendingFlashCount == 0)
+            {
+                return;
+            }
+
+            float deltaTime = Time.unscaledDeltaTime;
+
+            for (int slot = 0; slot < _pendingFlashes.Length; slot++)
+            {
+                if (_pendingFlashes[slot] < 0f)
+                {
+                    continue;
+                }
+
+                _pendingFlashes[slot] -= deltaTime;
+
+                if (_pendingFlashes[slot] < 0f)
+                {
+                    _pendingFlashCount--;
+                    FireFlash();
+                }
+            }
+        }
+
+        private void QueueFlashes(float swing)
+        {
+            if (swing < PHOTO_MIN_SWING)
+            {
+                return;
+            }
+
+            int count = Mathf.Min(_maxFlashes, Mathf.RoundToInt(swing * _flashesPerSwing));
+
+            for (int slot = 0; slot < _pendingFlashes.Length && count > 0; slot++)
+            {
+                if (_pendingFlashes[slot] >= 0f)
+                {
+                    continue;
+                }
+
+                // Front-loaded: most of the cameras go off as the play ends.
+                float spread = NextFloat();
+                _pendingFlashes[slot] = spread * spread * PHOTO_BURST_SECONDS;
+                _pendingFlashCount++;
+                count--;
+            }
+        }
+
+        /// <summary>
+        /// A photographer near the play: on a sideline, level with the ball give or
+        /// take PHOTO_SPREAD, or — when the ball is near a goal line — sometimes
+        /// behind that end zone.
+        /// </summary>
+        private void FireFlash()
+        {
+            Vector2 ball = _ball.Position;
+            Vector2 at;
+
+            float goalLine = Systems_FieldModel.ATTACKING_GOAL_LINE_Y;
+            float nearestGoal = ball.y >= 0f ? goalLine : -goalLine;
+
+            if (Mathf.Abs(nearestGoal - ball.y) < PHOTO_END_ZONE_REACH && NextFloat() < 0.4f)
+            {
+                float behind = goalLine + Systems_FieldModel.END_ZONE_DEPTH + 1.5f + (NextFloat() * 2.5f);
+                at = new Vector2(
+                    ((NextFloat() * 2f) - 1f) * Systems_FieldModel.HALF_WIDTH,
+                    ball.y >= 0f ? behind : -behind);
+            }
+            else
+            {
+                float side = NextFloat() < 0.5f ? -1f : 1f;
+                float y = Mathf.Clamp(
+                    ball.y + (((NextFloat() * 2f) - 1f) * PHOTO_SPREAD),
+                    -goalLine - Systems_FieldModel.END_ZONE_DEPTH,
+                    goalLine + Systems_FieldModel.END_ZONE_DEPTH);
+
+                at = new Vector2(
+                    side * (Systems_FieldModel.HALF_WIDTH + 1.5f + (NextFloat() * 3f)), y);
+            }
+
+            _photoEmit = default;
+            _photoEmit.position = at;
+            _photoEmit.velocity = Vector3.zero;
+            _photoEmit.startLifetime = PHOTO_FLASH_SECONDS;
+            _photoEmit.startSize = PHOTO_HALO_SIZE;
+            _photoEmit.startColor = PhotoHaloColor;
+            _photographers.Emit(_photoEmit, 1);
+
+            _photoEmit.startSize = PHOTO_CORE_SIZE;
+            _photoEmit.startColor = PhotoCoreColor;
+            _photographers.Emit(_photoEmit, 1);
+        }
+
+        private float NextFloat()
+        {
+            _noise ^= _noise << 13;
+            _noise ^= _noise >> 17;
+            _noise ^= _noise << 5;
+
+            return (_noise & 0x00FFFFFFu) / (float)0x01000000u;
         }
 
         /// <summary>

@@ -63,6 +63,43 @@ float PlayerEdgeCoverage(float2 uv, float radius)
     return total / weight;
 }
 
+// Where the stadium's casting key light is, in world space. Set once by
+// Systems_StadiumRigView: xy is the light's position, w is 1 once a rig has set
+// it. A global and not a material property, so the SRP batcher's per-material
+// layout is untouched, and there is one key for every player.
+float4 _PoFootballKeyLight;
+
+// Unit direction from this body toward the key, in the sprite's own UV frame.
+//
+// WHY THIS AND NOT A NORMAL MAP. The URP 2D lights only read a normal buffer when
+// normal mapping is switched on per light, and then they multiply EVERY surface
+// by N.L — the flat turf included, which takes the field's measured
+// ambient-to-bank ratio apart (docs/PRESENTATION.md). The bevel below already
+// has the shape's relief in it; what it lacked was the light. It used to lift
+// the sprite's own +Y, which rotates with the body, so a player turning round
+// turned his highlight round with him. Aimed at the key it stays on the side
+// the shadow does not fall on, however he is facing.
+//
+// Falls back to +Y — exactly the old bevel — when no rig has published a key,
+// which is training and the menu.
+half2 PlayerKeyDirection()
+{
+    if (_PoFootballKeyLight.w < 0.5)
+    {
+        return half2(0.0, 1.0);
+    }
+
+    float3 originWS = TransformObjectToWorld(float3(0.0, 0.0, 0.0));
+    float2 toKey = _PoFootballKeyLight.xy - originWS.xy;
+
+    // Object space is the sprite's frame; a flipped sprite mirrors its UVs.
+    float2 direction = TransformWorldToObjectDir(float3(toKey, 0.0), false).xy
+        * unity_SpriteProps.xy;
+
+    float length2 = dot(direction, direction);
+    return length2 > 1e-8 ? (half2)(direction * rsqrt(length2)) : half2(0.0, 1.0);
+}
+
 half3 PlayerDesaturate(half3 color, float amount)
 {
     // Rec. 709 luma. A flat average would turn the blue offense and the red
@@ -72,7 +109,7 @@ half3 PlayerDesaturate(half3 color, float amount)
     return lerp(color, luma.xxx, amount);
 }
 
-half4 PlayerBody(float2 uv, half4 tint)
+half4 PlayerBody(float2 uv, half4 tint, half2 keyDirection)
 {
     float alpha = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, uv).a;
 
@@ -99,10 +136,29 @@ half4 PlayerBody(float2 uv, half4 tint)
     fill *= 1.0 - saturate(_Fatigue) * 0.25;
 
     // Bevel: dark at the rim, lifted through the middle. The lift is applied
-    // off-centre in Y so the shading implies a light from above the field,
-    // matching the stadium rig's downward bias.
-    float shoulder = smoothstep(0.35, 1.0, coverage + (uv.y - 0.5) * 0.35);
+    // off-centre toward the key light, so the shading agrees with the shadow
+    // the same light throws (see PlayerKeyDirection).
+    float2 fromCentre = uv - 0.5;
+    float shoulder = smoothstep(0.35, 1.0, coverage + dot(fromCentre, keyDirection) * 0.35);
     float shade = lerp(1.0 - _BevelDepth, 1.0 + _BevelLift, shoulder);
+
+    // Relief: the band just inside the outline catches the key on the near side
+    // and falls into shade on the far one. Radial rather than a true gradient —
+    // for a circle they are the same, and for the square the error is at the
+    // corners, which are four pixels of a thirty-pixel body.
+    //
+    // IT CANNOT RAISE THE BRIGHTEST PIXEL. The band sits where the bevel has
+    // already darkened the fill to about 0.6-0.8; the most this lifts it is
+    // 1 + 0.2 * _Relief, which stays under the centre's 1 + _BevelLift. The bloom
+    // threshold in Systems_PostProcessView was tuned against that peak and the
+    // carrier rim above it, and neither moves.
+    float band = smoothstep(0.45, 0.70, coverage) * (1.0 - smoothstep(0.70, 0.97, coverage));
+    float radialLength2 = dot(fromCentre, fromCentre);
+    float facing = radialLength2 > 1e-6
+        ? dot(fromCentre * rsqrt(radialLength2), keyDirection)
+        : 0.0;
+    shade *= 1.0 + band * facing * 0.2 * _Relief;
+
     fill *= shade;
 
     // --- Outline ------------------------------------------------------------

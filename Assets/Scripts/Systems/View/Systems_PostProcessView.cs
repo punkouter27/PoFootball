@@ -214,6 +214,7 @@ namespace PoFootball.Views
         /// </summary>
         private void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             TickHitPulse();
 
             if (_pulseElapsed < 0f)

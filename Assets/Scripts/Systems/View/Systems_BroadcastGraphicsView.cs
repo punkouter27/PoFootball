@@ -41,22 +41,6 @@ namespace PoFootball.Views
         /// <summary>Under Systems_HudView (0): the banner and the final sheet draw over this.</summary>
         private const float PANEL_SORT_ORDER = -10f;
 
-        /// <summary>
-        /// Height of Systems_HudView's score row, below the status bar. Measured
-        /// on a 1080x1920 capture (the bar ends at 222); the HUD does not publish it.
-        /// 120 was the first guess and put the ribbon behind the scoreboard.
-        /// </summary>
-        private const int SCOREBOARD_HEIGHT = 146;
-
-        /// <summary>
-        /// Top of the band the HUD's banner and carrier chip use — its
-        /// BANNER_CLEARANCE, which leaves room for the ribbon above it.
-        /// </summary>
-        private const int BANNER_TOP = Systems_UiTheme.STATUS_BAR_HEIGHT + 200;
-
-        /// <summary>Clearance under the banner band for the hit meter.</summary>
-        private const int HIT_METER_TOP = BANNER_TOP + 170;
-
         private Systems_PresentationBudget _budget;
         private Systems_GameModel _game;
         private Systems_PlayModel _play;
@@ -177,21 +161,21 @@ namespace PoFootball.Views
             ribbon.style.position = Position.Absolute;
             ribbon.style.left = 0;
             ribbon.style.right = 0;
-            ribbon.style.top = Systems_UiTheme.STATUS_BAR_HEIGHT + SCOREBOARD_HEIGHT;
+            ribbon.style.top = Systems_HudLayout.RIBBON_TOP;
             layer.Add(ribbon);
 
             _callSheetCard = new Systems_CallSheetCard();
             VisualElement card = _callSheetCard.Root;
             card.style.position = Position.Absolute;
             card.style.left = Systems_UiTheme.SPACE_M;
-            card.style.top = BANNER_TOP;
+            card.style.top = Systems_HudLayout.BANNER_TOP;
             layer.Add(card);
 
             _hitMeter = new Systems_HitMeter();
             VisualElement meter = _hitMeter.Root;
             meter.style.position = Position.Absolute;
             meter.style.right = Systems_UiTheme.SPACE_M;
-            meter.style.top = HIT_METER_TOP;
+            meter.style.top = Systems_HudLayout.HIT_METER_TOP;
             layer.Add(meter);
 
             _ticker = new Systems_CommentaryTicker();
@@ -199,13 +183,13 @@ namespace PoFootball.Views
             ticker.style.position = Position.Absolute;
             ticker.style.left = Systems_UiTheme.SPACE_M;
             ticker.style.right = Systems_UiTheme.SPACE_M;
-            ticker.style.bottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT
-                + Systems_UiTheme.TAP_TARGET + (Systems_UiTheme.SPACE_M * 2);
+            ticker.style.bottom = Systems_HudLayout.CARD_DOCK_BOTTOM;
             layer.Add(ticker);
         }
 
         protected override void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             base.Update();
 
             if (!IsBuilt)

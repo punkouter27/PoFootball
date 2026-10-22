@@ -94,16 +94,6 @@ namespace PoFootball.Views
         private static readonly string[] MphLabels = BuildMphLabels();
 
         /// <summary>
-        /// Distance from the bottom of the status bar to the top of the result
-        /// banner: the scoreboard's own height (146), the win-probability ribbon
-        /// Systems_BroadcastGraphicsView draws directly under it (40), and a gap.
-        /// It was 164 before the ribbon, which then sat under the banner and the
-        /// carrier chip; the gap stays when a viewer switches the ribbon off,
-        /// because a banner that jumps with a setting is worse than 40 units of turf.
-        /// </summary>
-        private const int BANNER_CLEARANCE = 200;
-
-        /// <summary>
         /// How far a pointer may travel, in panel units, and still be a tap. The
         /// panel is 1080 wide on every device, so this is about a fiftieth of the
         /// screen — more than a thumb wobbles, less than anyone drags on purpose.
@@ -312,6 +302,9 @@ namespace PoFootball.Views
         private float _tapStartTime;
         private bool _tapCandidate;
 
+        /// <summary>Set once the score-row warning has been logged; it is one fault, not one per layout.</summary>
+        private bool _scoreRowOverflowReported;
+
         // The focus card: the tapped player's role, state, speed and fatigue.
         private VisualElement _focusCard;
         private Label _focusRole;
@@ -430,6 +423,22 @@ namespace PoFootball.Views
         /// protecting against a failure that can no longer reach it, and it cost a
         /// second row to do so.
         /// </summary>
+        private void OnScoreRowGeometry(GeometryChangedEvent change)
+        {
+            if (_scoreRowOverflowReported
+                || change.newRect.height <= Systems_HudLayout.SCORE_ROW_HEIGHT + 0.5f)
+            {
+                return;
+            }
+
+            _scoreRowOverflowReported = true;
+            Debug.LogWarning(
+                "[PoFootball] The score row is " + Mathf.RoundToInt(change.newRect.height)
+                + " units tall and its slot in Systems_HudLayout is "
+                + Systems_HudLayout.SCORE_ROW_HEIGHT
+                + ": the win-probability ribbon is drawn behind it. Raise SCORE_ROW_HEIGHT.");
+        }
+
         private VisualElement BuildScoreboard()
         {
             VisualElement bar = Systems_UiTheme.Row();
@@ -442,7 +451,15 @@ namespace PoFootball.Views
             // top strip on every screen for the title, the frame rate and MENU; at
             // top: 0 the score row rendered underneath it and the away team's points
             // came out behind the MENU chip.
-            bar.style.top = Systems_UiTheme.STATUS_BAR_HEIGHT;
+            bar.style.top = Systems_HudLayout.SCORE_ROW_TOP;
+
+            // HELD AT ITS SLOT, AND WATCHED. The ribbon under this row is placed at
+            // the slot's bottom, not at wherever this row happens to end. A minimum
+            // keeps the row from coming up short of it; the callback says so if the
+            // contents ever push past it, because then the ribbon is behind the
+            // scoreboard and nothing else would notice.
+            bar.style.minHeight = Systems_HudLayout.SCORE_ROW_HEIGHT;
+            bar.RegisterCallback<GeometryChangedEvent>(OnScoreRowGeometry);
 
             // OPAQUE (2026-10-16 review). It was translucent "so the top of the field
             // still reads through the chrome", and what read through was every yard
@@ -743,7 +760,7 @@ namespace PoFootball.Views
             strip.style.position = Position.Absolute;
             strip.style.left = 0;
             strip.style.right = 0;
-            strip.style.top = Systems_UiTheme.STATUS_BAR_HEIGHT + BANNER_CLEARANCE;
+            strip.style.top = Systems_HudLayout.BANNER_TOP;
             strip.style.justifyContent = Justify.Center;
             strip.pickingMode = PickingMode.Ignore;
 
@@ -790,7 +807,7 @@ namespace PoFootball.Views
             strip.style.position = Position.Absolute;
             strip.style.left = 0;
             strip.style.right = 0;
-            strip.style.bottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT + Systems_UiTheme.SPACE_M;
+            strip.style.bottom = Systems_HudLayout.TRANSPORT_BOTTOM;
             strip.style.justifyContent = Justify.Center;
             strip.pickingMode = PickingMode.Ignore;
 
@@ -1180,8 +1197,7 @@ namespace PoFootball.Views
             strip.style.position = Position.Absolute;
             strip.style.left = 0;
             strip.style.right = 0;
-            strip.style.bottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT
-                + Systems_UiTheme.TAP_TARGET + (Systems_UiTheme.SPACE_M * 2);
+            strip.style.bottom = Systems_HudLayout.CARD_DOCK_BOTTOM;
             strip.style.justifyContent = Justify.Center;
             strip.pickingMode = PickingMode.Ignore;
 
@@ -1460,8 +1476,7 @@ namespace PoFootball.Views
             // like a proportion. The banner belongs just below the bar on every
             // screen, clear of the middle of the field where the ball usually is,
             // and that is a distance, not a ratio.
-            overlay.Content.style.paddingTop =
-                Systems_UiTheme.STATUS_BAR_HEIGHT + BANNER_CLEARANCE;
+            overlay.Content.style.paddingTop = Systems_HudLayout.BANNER_TOP;
 
             _bannerHeadline = Systems_UiTheme.Text(
                 string.Empty, Systems_UiTheme.TEXT_BANNER,
@@ -1632,6 +1647,7 @@ namespace PoFootball.Views
         /// </summary>
         protected override void Update()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             base.Update();
 
             if (!IsBuilt || _game == null)

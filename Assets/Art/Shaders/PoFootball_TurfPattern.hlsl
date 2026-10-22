@@ -211,6 +211,71 @@ half4 TurfAlbedo(float2 uv)
     return half4(albedo, 1.0);
 }
 
+// --- Shock ripples ----------------------------------------------------------
+//
+// The grass flattening outward from a hit hard enough to strip the ball, as a
+// bright crest with a dark trough behind it — blades laid over toward the
+// light and then away from it. Systems_ImpactView owns the four slots and
+// writes them only while one is running:
+//
+//     xy  centre, in the same yards-from-centre frame as TurfAlbedo
+//     z   current radius in yards (the view advances it)
+//     w   amplitude, already faded (0 is an empty slot)
+//
+// GLOBALS, NOT MATERIAL PROPERTIES, for the reason PoFootball/Player's key
+// light is one: the UnityPerMaterial block has to be identical in every pass,
+// and an array in it would be four more vectors to keep in step three times.
+// Systems_FieldRenderer's MaterialPropertyBlock is untouched.
+//
+// It only ever multiplies the colour by 1 +/- about a quarter at its strongest,
+// on grass whose brightest channel is under 0.3, so it can never reach the
+// bloom threshold.
+//
+// THE CONTRAST WAS SET AGAINST A CAPTURE. At 0.24 and 0.7 yd the first version
+// was a six per cent ring on mottled grass, and on a paused frame with a known
+// ripple in it nobody could point to where it was.
+#define POFOOTBALL_RIPPLE_SLOTS 4
+
+float4 _PoFootballRipples[POFOOTBALL_RIPPLE_SLOTS];
+
+/// Half-width of the crest, in yards: about a body and a half. Narrower reads as
+/// a line drawn on the turf, much wider as the field changing colour.
+#define POFOOTBALL_RIPPLE_WIDTH 1.1
+
+/// Peak brightness change, before the slot's own amplitude: the wave below
+/// peaks at 0.43, so the crest is +26% at a full-strength hit.
+#define POFOOTBALL_RIPPLE_CONTRAST 0.6
+
+half3 TurfRipples(half3 color, float2 uv)
+{
+    float halfTotal = _HalfLengthYards + _EndZoneYards;
+    float2 yards = float2((uv.x - 0.5) * 2.0 * _HalfWidthYards,
+                          (uv.y - 0.5) * 2.0 * halfTotal);
+
+    float wave = 0.0;
+
+    [unroll]
+    for (int slot = 0; slot < POFOOTBALL_RIPPLE_SLOTS; slot++)
+    {
+        float4 ripple = _PoFootballRipples[slot];
+
+        // A uniform branch: every fragment takes the same side of it, so an
+        // empty slot costs a compare and nothing else.
+        if (ripple.w <= 0.0)
+        {
+            continue;
+        }
+
+        float offset = (distance(yards, ripple.xy) - ripple.z) / POFOOTBALL_RIPPLE_WIDTH;
+
+        // The derivative of a gaussian: positive ahead of the radius, negative
+        // behind it, zero on it and far from it. Peaks at about 0.43.
+        wave += -offset * exp(-offset * offset) * ripple.w;
+    }
+
+    return color * (1.0 + POFOOTBALL_RIPPLE_CONTRAST * wave);
+}
+
 // --- Down markers ---------------------------------------------------------
 //
 // The line of scrimmage and the line to gain, sideline to sideline, laid over

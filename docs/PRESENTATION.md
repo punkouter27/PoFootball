@@ -298,3 +298,71 @@ not from reading: the HUD's score row is **146** units tall (the ribbon sits at
 222), and the result banner and carrier chip moved down to make room
 (`Systems_HudView.BANNER_CLEARANCE` 164 → 200). The Game view held 60 FPS in
 every capture, but the frame cost has **not** been profiled.
+
+---
+
+## Shading, impact, crowd and fit (2026-10-22, second pass)
+
+Ten items from one request. Every one of them is presentation: none changes a
+tick of the simulation, an observation or a reward, so none is a contract
+revision. Measured in `SCN_GAME` at 1080x1920 with everything on, and the
+captures are in `SCREENSHOTS/gfx_audio/` with `SCREENSHOTS/gfx_audio_report.html`.
+
+| | What | Where | Driven by |
+|---|---|---|---|
+| 1 | Bevel and rim relief turned toward the casting key light | `PoFootball/Player` (`PlayerKeyDirection`, `_Relief`), global `_PoFootballKeyLight` set by `Systems_StadiumRigView` | the key's world position |
+| 2 | The tackle is three layers: pop, mass-weighted thud, pad crack at the fumble threshold | `Systems_AudioView.OnTackle`, `Systems_ToneBank.Thud` / `Crack` | closing speed, tackler mass |
+| 3 | One looping scrum bed for the line | `Systems_AudioView.TickScrum`, `Systems_ToneBank.Scrum` | `Systems_ContactMessage`, summed and decayed |
+| 4 | A shock ripple across the turf on a hit that can strip the ball | `PoFootball/Turf` (`TurfRipples`), four globals advanced by `Systems_ImpactView` | `FUMBLE_CLOSING_SPEED`, like the ring and the lens pulse |
+| 5 | Photographers' flashes on the sidelines and behind the end zone | `Systems_StadiumRigView` (`Photographers`) | `Systems_WinProbabilityModel.LastSwing` |
+| 6 | The home crowd roars or hushes with the play's swing | `Systems_AudioView.TickCrowdReaction` | `LastSwing`, signed |
+| 7 | Fatigue load split by source; drawn bodies checked against colliders | `Systems_SimHealthModel`, `Agent_FootballPlayer.AccumulateFatigue`, `Systems_RoleShapeApplier.CheckBodyFit`, DEBUG sheet | applied force, torque, contact impulse |
+| 8 | Text cut off, overflowing, scrolling or too small to read | `Systems_UiFitAudit`, DEBUG sheet | every visible `TextElement` |
+| 9 | One vertical stack of named slots for the HUD | `Systems_HudLayout` | — |
+| 10 | What the decoration's scripts cost a frame, on the device | `Systems_PresentationProfiler`, DEBUG sheet, telemetry `presentationMsPerFrame` | one `ProfilerMarker` around every view's Update/LateUpdate |
+
+Decisions worth keeping:
+
+- **Relief is shading, not a normal map, and no Blender asset was made.** URP's
+  2D lights only read a normal buffer with normal mapping switched on per
+  light, and then they multiply every surface by N.L — the flat turf included,
+  which would take apart the ambient-to-bank ratio above. The bevel already
+  had the relief; it was lit from the sprite's own +Y, so a player's highlight
+  turned when he did. It now faces the key. It cannot raise the brightest
+  pixel (the band it lifts sits under the bevel's centre), so the bloom
+  threshold is untouched. Verified by mirroring the key on a paused frame: the
+  lit rims flip to the other side (`crop_key_ne.png` / `crop_key_sw.png`).
+- **The ripple's first contrast was invisible.** 0.24 at 0.7 yd read as a 6%
+  ring on mottled grass, and on a paused frame with a ripple logged at a known
+  spot it could not be found. It is 0.6 at 1.1 yd, travelling 10 yd/s for 1.1 s.
+- **Photographers are particles, not lights.** A flash is two additive motes
+  for 0.09 s, off the field, in real time. Twelve on a twenty-point swing.
+  SetPass did not move with them on or off.
+- **The scrum is open most of a play.** At 4x it was audible on about three
+  frames in four; it is a bed at a fifth of the effects level and decays to
+  silence in under three game seconds once contacts stop.
+- **Two "the solver is blowing contacts apart" detectors were built and both
+  were deleted.** Ticks with the fatigue contact term at its cap read 5.9% —
+  but the cap is a body's own drive force, which a held block meets honestly.
+  Ticks past four times the cap read 0.8% — but a tackle lands its impulse in
+  one 20 ms step, about seven times a lineman's drive force. An impulse no body
+  could survive throws it past `MAX_BODY_SPEED`, which the speed clamp already
+  counts. What stays is the split itself (59% drive, 27% steer, 14% contact in
+  a played game) and a finding if contact ever stops loading fatigue at all.
+- **The layout check found a real one-unit overlap on its first run.** The
+  score row is 147 units, not the 146 it had been measured at, so the ribbon
+  sat one unit over it. `SCORE_ROW_HEIGHT` is 147 and the unit came out of the
+  gap, so the banner band did not move.
+- **The fit audit reads clean** at 1080x1920, 1080x2400 and 1200x1920: nothing
+  cut off, overflowing or scrolling; the smallest text is 12-13 pt on a 96 DPI
+  Editor display. A handset's DPI is what makes that number mean something.
+- **The DEBUG sheet's six slots now keep the six worst.** `Add` used to drop
+  anything after the sixth, so the order of the checks, not their severity,
+  decided what a full sheet left out.
+- **SetPass reads 139 or 278 in the Editor, alternating.** 139 is the scene
+  (the figure measured on 2026-10-02); the doubled frames are the Editor drawing
+  the Game view twice, and turning this pass's additions off did not move
+  either number. The 280 tripwire catches the doubled frames now and then;
+  read it on a device.
+- **Effects cost 0.15-0.40 ms a frame** in their own scripts on this laptop.
+  The finding fires at 4 ms. Nobody has read it on a handset yet.

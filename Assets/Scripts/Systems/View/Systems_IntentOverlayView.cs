@@ -378,6 +378,7 @@ namespace PoFootball.Views
         /// </summary>
         private void LateUpdate()
         {
+            using var presentationCost = Systems_PresentationProfiler.Measure();
             _vertices.Clear();
             _colors.Clear();
             _indices.Clear();
