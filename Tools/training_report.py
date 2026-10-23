@@ -396,10 +396,17 @@ def speed_from_log(run):
 
 
 def build(run, compare):
-    global MAX_STEPS
+    global MAX_STEPS, LESSON_NAMES
     saved = f"results/{run}/configuration.yaml"
     if os.path.exists(saved):
-        MAX_STEPS = yaml.safe_load(open(saved))["behaviors"]["Offense"]["max_steps"]
+        config = yaml.safe_load(open(saved))
+        MAX_STEPS = config["behaviors"]["Offense"]["max_steps"]
+        # The Lesson Number series indexes THIS run's curriculum, not a fixed list:
+        # base25's is RunFit then FullGame, and a single-value run has one lesson.
+        lessons = ((config.get("environment_parameters") or {})
+                   .get("spot_lesson") or {}).get("curriculum") or []
+        if lessons and all(isinstance(lesson, dict) and lesson.get("name") for lesson in lessons):
+            LESSON_NAMES = [lesson["name"] for lesson in lessons]
 
     data = load(run)
     steps = brain_steps(run)

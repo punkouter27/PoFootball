@@ -580,6 +580,12 @@ speed, so no damping fixes them. A joint fit puts every role near damping 1.4-1.
 slightly higher top speeds (`results/audit/calibration-rev16.json`) — close to the
 1.5 revision 3 abandoned as "fast-forward". NOT CHANGED: it is a balance change,
 judged on the realism line only, and damping also sets how hard a body pushes.
+TRIED 2026-10-23 on the revision 17 scripted game (damping 1.5, WR/CB 9.6, S 9.4,
+RB 9.5, LB 9.1, TE/FB 8.9, QB 8.8, lines 7.4 at 2.4): 2 of 5 bands against 3 of 5
+for the committed constants (`realism-20261023-024023.json` vs `-023435`) — yards a
+play 4.94 -> 7.24, out of band; rush 1.12 -> 1.81 and first downs 0.02 -> 0.05 a play,
+both still out. Reverted. The heuristic was tuned against the old sprint, so a
+trained brain, not the script, is the fair test of it.
 `Tools > PoFootball > Audit > Record Observations` (`Editor_ObservationAudit`) records
 every brain's observations as ML-Agents `.demo` files and `Tools/audit_observations.py`
 reports clamped, constant and duplicated floats; it has not been run on real data yet
