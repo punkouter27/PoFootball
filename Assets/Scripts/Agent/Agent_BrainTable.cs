@@ -43,6 +43,15 @@ namespace PoFootball.Agents
         /// <summary>Resources path. Loaded once per run, from the first agent to wake.</summary>
         public const string RESOURCE_PATH = "PoFootballBrains";
 
+        /// <summary>
+        /// Editor only: a SessionState key holding the asset path of a table to load
+        /// INSTEAD of the Resources one, for one realism evaluation of a training
+        /// checkpoint (Editor_CheckpointRealism). The override still has to pass
+        /// <see cref="MatchesCurrentContract"/>; it changes where the table comes
+        /// from, never whether it is trusted. Erased when the evaluation ends.
+        /// </summary>
+        public const string EDITOR_OVERRIDE_SESSION_KEY = "PoFootball.BrainTableOverride";
+
         [System.Serializable]
         private struct Entry
         {

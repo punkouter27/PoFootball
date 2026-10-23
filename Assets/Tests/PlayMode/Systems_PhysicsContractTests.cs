@@ -129,6 +129,58 @@ namespace PoFootball.Tests
         }
 
         /// <summary>
+        /// Tools/calibrate_dynamics.py times every role's 10- and 40-yard sprint
+        /// against the combine WITHOUT Unity, by stepping Box2D's integrator by
+        /// hand: v += h*F/m, v /= 1 + h*d, x += h*v. This pins that the real
+        /// Physics2D steps the same recurrence, so the tool's splits are the
+        /// game's and not an approximation of it. One tick of slack on the
+        /// crossing; the residual is float rounding.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator SprintSplit_MatchesTheIntegratorThisToolModels(
+            [Values(Systems_PlayerRole.WideReceiver, Systems_PlayerRole.OffensiveLine)]
+            Systems_PlayerRole role)
+        {
+            const float TEN_YARDS = 10f * 0.9144f;
+
+            Rigidbody2D rigidbody = CreateConfiguredBody(role);
+            float driveForce = Systems_RoleTable.DriveForceOf(role);
+            float mass = Systems_RoleTable.MassOf(role);
+            float damping = Systems_RoleTable.LinearDampingOf(role);
+            Vector2 start = rigidbody.position;
+
+            float modelSpeed = 0f;
+            float modelDistance = 0f;
+            int modelTick = -1;
+            int bodyTick = -1;
+
+            for (int tick = 1; tick <= 500 && (modelTick < 0 || bodyTick < 0); tick++)
+            {
+                rigidbody.AddForce(rigidbody.transform.up * driveForce);
+                yield return new WaitForFixedUpdate();
+
+                modelSpeed = (modelSpeed + (FIXED_DELTA_TIME * driveForce / mass))
+                    / (1f + (FIXED_DELTA_TIME * damping));
+                modelDistance += modelSpeed * FIXED_DELTA_TIME;
+
+                if (modelTick < 0 && modelDistance >= TEN_YARDS)
+                {
+                    modelTick = tick;
+                }
+
+                if (bodyTick < 0 && Vector2.Distance(rigidbody.position, start) >= TEN_YARDS)
+                {
+                    bodyTick = tick;
+                }
+            }
+
+            Assert.That(
+                Mathf.Abs(bodyTick - modelTick), Is.LessThanOrEqualTo(1),
+                $"{role} crossed ten yards on tick {bodyTick}, the integrator model on "
+                + $"{modelTick}: Tools/calibrate_dynamics.py no longer describes this physics.");
+        }
+
+        /// <summary>
         /// SteerTorqueOf derives its torque from I = 0.5 * m * r^2, the moment of
         /// inertia of a uniform disc. That is an assumption about what Unity
         /// computes for a circle collider, not something the C# can observe, so it

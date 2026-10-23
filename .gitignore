@@ -119,6 +119,9 @@ __pycache__/
 # mlagents-learn output. Checkpoints are large and regenerable; only the
 # promoted brains under Assets/Agents/<Name>_v<NN>/ are version-controlled.
 /results/
+# A training checkpoint staged for one realism evaluation (Editor_CheckpointRealism).
+/Assets/Agents/_Checkpoint/
+/Assets/Agents/_Checkpoint.meta
 /summaries/
 /runs/
 training_status.json

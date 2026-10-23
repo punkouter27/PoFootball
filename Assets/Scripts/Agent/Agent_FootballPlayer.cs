@@ -115,6 +115,25 @@ namespace PoFootball.Agents
         private int _driveSaturatedTicks;
         private string _driveStatKey;
         private string _driveSaturationStatKey;
+
+        // --- REWARD LEDGER (flushed in EndEpisodeNow, beside the effort KPIs) ---
+        //
+        // What each term actually PAID this play, per brain. The trainer reports
+        // one cumulative reward, which is zero-sum across the two sides and says
+        // nothing about which term earned it — so a shaping term that grew to
+        // outweigh the result it shapes (the defense paid 5M steps for standing
+        // off in base22) was invisible until a replay. Reward/<brain>/ShapingShare
+        // is the role term's share of everything paid, the number
+        // Tools/watch_hacks.py warns on. Keys built once in Awake.
+        private float _progressRewardSum;
+        private float _roleRewardSum;
+        private float _callRewardSum;
+        private float _terminalRewardSum;
+        private string _ledgerProgressKey;
+        private string _ledgerRoleKey;
+        private string _ledgerCallKey;
+        private string _ledgerTerminalKey;
+        private string _ledgerShapingShareKey;
         private bool _isCarrier;
         private float _previousBallY;
         private float _previousBallDistance;
@@ -444,6 +463,16 @@ namespace PoFootball.Agents
 
             _driveStatKey = "Control/Drive/" + _role;
             _driveSaturationStatKey = "Control/DriveSaturation/" + _role;
+
+            // Per BRAIN, not per role: every environment stat reaches every
+            // behavior's event file, so the brain has to be in the key.
+            string ledgerPrefix = "Reward/"
+                + Systems_RoleTable.BehaviorNameOf(Systems_RoleTable.BrainOf(_role)) + "/";
+            _ledgerProgressKey = ledgerPrefix + "Progress";
+            _ledgerRoleKey = ledgerPrefix + "Role";
+            _ledgerCallKey = ledgerPrefix + "Call";
+            _ledgerTerminalKey = ledgerPrefix + "Terminal";
+            _ledgerShapingShareKey = ledgerPrefix + "ShapingShare";
             _isBlocker = Reward_Role.IsBlocker(_role);
             _isReceiver = Reward_Role.IsReceiver(_role);
             _isBack = _role == Systems_PlayerRole.Fullback
@@ -1309,8 +1338,13 @@ namespace PoFootball.Agents
                 _previousBallY = ballY;
             }
 
-            AddReward(Reward_Progress.PerTick(_side, yardsDelta));
-            AddReward(RoleReward(ballPosition, ballDistance, interceptPotential, countsAsProgress));
+            float progressReward = Reward_Progress.PerTick(_side, yardsDelta);
+            float roleReward = RoleReward(ballPosition, ballDistance, interceptPotential, countsAsProgress);
+
+            AddReward(progressReward);
+            AddReward(roleReward);
+            _progressRewardSum += progressReward;
+            _roleRewardSum += roleReward;
 
             _previousBallDistance = ballDistance;
             _previousInterceptPotential = interceptPotential;
@@ -1626,7 +1660,10 @@ namespace PoFootball.Agents
 
         public void ApplyTerminalReward(in Systems_PlayResult result)
         {
-            AddReward(Reward_Terminal.For(_side, in result));
+            float terminalReward = Reward_Terminal.For(_side, in result);
+
+            AddReward(terminalReward);
+            _terminalRewardSum += terminalReward;
         }
 
         public void EndEpisodeNow()
@@ -1635,7 +1672,38 @@ namespace PoFootball.Agents
             // the trainer attributes these steps to, and a stat written after it
             // lands in the next play's window.
             FlushControlEffort();
+            FlushRewardLedger();
             EndEpisode();
+        }
+
+        /// <summary>
+        /// Writes what each reward term paid this play, then clears the sums.
+        /// Guarded on the communicator for the reason FlushControlEffort is.
+        /// </summary>
+        private void FlushRewardLedger()
+        {
+            if (Academy.IsInitialized && Academy.Instance.IsCommunicatorOn)
+            {
+                StatsRecorder stats = Academy.Instance.StatsRecorder;
+
+                stats.Add(_ledgerProgressKey, _progressRewardSum);
+                stats.Add(_ledgerRoleKey, _roleRewardSum);
+                stats.Add(_ledgerCallKey, _callRewardSum);
+                stats.Add(_ledgerTerminalKey, _terminalRewardSum);
+
+                float paid = Mathf.Abs(_progressRewardSum) + Mathf.Abs(_roleRewardSum)
+                    + Mathf.Abs(_callRewardSum) + Mathf.Abs(_terminalRewardSum);
+
+                if (paid > 0f)
+                {
+                    stats.Add(_ledgerShapingShareKey, Mathf.Abs(_roleRewardSum) / paid);
+                }
+            }
+
+            _progressRewardSum = 0f;
+            _roleRewardSum = 0f;
+            _callRewardSum = 0f;
+            _terminalRewardSum = 0f;
         }
 
         /// <summary>
@@ -2571,7 +2639,10 @@ namespace PoFootball.Agents
 
             // Share BEFORE recording this call, so a quarterback is charged for the
             // habit it already had rather than for the play it is about to run.
-            AddReward(Reward_Call.Repetition(Reward_Call.ShareOf(_callCounts, call)));
+            float charge = Reward_Call.Repetition(Reward_Call.ShareOf(_callCounts, call));
+
+            AddReward(charge);
+            _callRewardSum += charge;
 
             // Fixed-size ring: evict the oldest, add the new one. No allocation.
             if (_callWindowFilled == Systems_SimConstants.CALL_HISTORY_PLAYS)

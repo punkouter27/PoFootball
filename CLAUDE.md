@@ -177,7 +177,7 @@ three million steps and 89% of throws complete. It had been fitted for ~5M steps
 while standing off paid. `football_base23` (`FootballBase23`) therefore trains the
 DEFENSE BRAIN FROM SCRATCH while Offense, Quarterback and DefenseCall keep base22's
 weights, through per-behavior `init_path` in the config — no `--initialize-from`.
-`football_base24` (`FootballBase24`, written 2026-10-22, NOT YET RUN) continues all
+`football_base24` (`FootballBase24`, launched 2026-10-22 16:18 for ten hours) continues all
 four brains from base23's weights with one reward change, so still revision 16: a
 defender is paid the fall in its TIME TO INTERCEPT the ball, not the distance
 closed — closing distance is minimised by running at where the carrier is, which
@@ -540,6 +540,21 @@ defenders converging on where a thrown ball HAD been) and were kept, but the
 scripted game is still a run game that loses ground and a pass game that goes the
 distance. A trained revision 15 brain, gated on these bands, is the way out.
 
+**Calibration and audits (2026-10-22).** `Tools/calibrate_dynamics.py` times every
+role's 10- and 40-yard sprint from the C# constants, with Box2D's integrator, which
+`Systems_PhysicsContractTests.SprintSplit_MatchesTheIntegratorThisToolModels` pins
+against real Physics2D. On revision 16/17 constants **every role is FAR OFF the combine**:
+skill players run 10 yards in ~2.0 s (combine ~1.55) and 40 in 5.2 s (4.5); tight ends,
+fullbacks, quarterbacks and both lines have a top speed BELOW their forty's average
+speed, so no damping fixes them. A joint fit puts every role near damping 1.4-1.6 with
+slightly higher top speeds (`results/audit/calibration-rev16.json`) — close to the
+1.5 revision 3 abandoned as "fast-forward". NOT CHANGED: it is a balance change,
+judged on the realism line only, and damping also sets how hard a body pushes.
+`Tools > PoFootball > Audit > Record Observations` (`Editor_ObservationAudit`) records
+every brain's observations as ML-Agents `.demo` files and `Tools/audit_observations.py`
+reports clamped, constant and duplicated floats; it has not been run on real data yet
+(the Editor was closed for base24).
+
 `Tools > PoFootball > Sim Speed > 8x` (editor-only, `Assets/Editor/Editor_SimSpeed.cs`)
 turns a full game from ~10 minutes into ~100 seconds. It raises `Time.timeScale`
 only — `fixedDeltaTime` is untouched, so it is the same measurement — and it always
@@ -620,6 +635,16 @@ hand:
 
 # watch a live run's play-call entropy; exits nonzero the moment it collapses
 .venv\Scripts\python.exe Tools\watch_entropy.py --run football_base06
+
+# watch a live run for every reward hack this project has paid for once (stall,
+# flags, solver blow-ups, no sacks, touchdown flood, call or front collapse,
+# shaping outgrowing the result); --stop-trainer sends CTRL+C on a HALT
+.venv\Scripts\python.exe Tools\watch_hacks.py --run football_base25 --once
+
+# AFTER a run: play the 4 fixed-seed realism games with each of the newest
+# checkpoints (Editor_CheckpointRealism; never touches the promoted table) and
+# rank them, so the brain promoted is the checkpoint that plays football
+.venv\Scripts\python.exe Tools\checkpoint_realism.py --run football_base24 --last 4
 ```
 
 The gate reads every expected value out of `Sensor_FootballState.cs`,

@@ -58,6 +58,19 @@ namespace PoFootball.Agents
             _loaded = true;
             _table = Resources.Load<Agent_BrainTable>(Agent_BrainTable.RESOURCE_PATH);
 
+#if UNITY_EDITOR
+            // A checkpoint under evaluation (Editor_CheckpointRealism). Judged by the
+            // same MatchesCurrentContract as the real table, in Report below.
+            string overridePath = UnityEditor.SessionState.GetString(
+                Agent_BrainTable.EDITOR_OVERRIDE_SESSION_KEY, string.Empty);
+
+            if (!string.IsNullOrEmpty(overridePath))
+            {
+                _table = UnityEditor.AssetDatabase.LoadAssetAtPath<Agent_BrainTable>(overridePath);
+                Debug.Log($"[PoFootball] Brain table OVERRIDDEN for evaluation: {overridePath}");
+            }
+#endif
+
             Report();
         }
 

@@ -65,6 +65,12 @@ namespace PoFootball.EditorTools
         private const string KEY_EXIT_CODE = "PoFootball.Realism.ExitCode";
         private const string KEY_SEEDED = "PoFootball.Realism.Seeded";
 
+        /// <summary>
+        /// What the brains under test are, for the report: set by
+        /// Editor_CheckpointRealism to "run@step", absent for the promoted table.
+        /// </summary>
+        internal const string KEY_BRAIN_LABEL = "PoFootball.Realism.BrainLabel";
+
         /// <summary>Must match the Debug.Log in Systems_GameFlowSystem's final whistle.</summary>
         private static readonly Regex RealismLine = new Regex(
             @"\[PoFootball\] REALISM\s+yards/play (-?[\d.]+) \| 4th downs faced (\d+) "
@@ -315,17 +321,28 @@ namespace PoFootball.EditorTools
             SessionState.EraseString(KEY_RESULTS);
             SessionState.EraseString(KEY_GAME_STARTED);
             SessionState.EraseBool(KEY_SEEDED);
+
+            // A checkpoint's override lasts exactly one evaluation, finished or not,
+            // so the next play-mode session is back on the promoted table.
+            SessionState.EraseString(KEY_BRAIN_LABEL);
+            SessionState.EraseString(Agent_BrainTable.EDITOR_OVERRIDE_SESSION_KEY);
         }
 
         private static string WriteReport(string results)
         {
-            Agent_BrainTable table = Resources.Load<Agent_BrainTable>(Agent_BrainTable.RESOURCE_PATH);
+            string overridePath = SessionState.GetString(
+                Agent_BrainTable.EDITOR_OVERRIDE_SESSION_KEY, string.Empty);
+            Agent_BrainTable table = string.IsNullOrEmpty(overridePath)
+                ? Resources.Load<Agent_BrainTable>(Agent_BrainTable.RESOURCE_PATH)
+                : AssetDatabase.LoadAssetAtPath<Agent_BrainTable>(overridePath);
             bool brainsLoaded = table != null && table.MatchesCurrentContract;
+            string label = SessionState.GetString(KEY_BRAIN_LABEL, string.Empty);
 
             StringBuilder json = new StringBuilder();
             json.Append("{\n");
             json.Append($"  \"contract_revision\": {Agent_ActionContract.CONTRACT_REVISION},\n");
             json.Append($"  \"brains_loaded\": {(brainsLoaded ? "true" : "false")},\n");
+            json.Append($"  \"brains\": \"{(label.Length > 0 ? label : "promoted")}\",\n");
             json.Append($"  \"sim_speed\": {SIM_SPEED.ToString(CultureInfo.InvariantCulture)},\n");
             json.Append($"  \"seeds\": [{string.Join(", ", SEEDS)}],\n");
             json.Append("  \"games\": [\n");

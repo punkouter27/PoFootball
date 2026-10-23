@@ -49,6 +49,18 @@ namespace PoFootball.EditorTools
                 return;
             }
 
+            WriteTable(agentDir, TABLE_PATH);
+        }
+
+        /// <summary>
+        /// Writes a table at <paramref name="tablePath"/> listing every group's
+        /// `{group}.onnx` in <paramref name="agentDir"/>, stamped with the current
+        /// revision. False, and nothing written, if any group's file is missing.
+        /// Shared with Editor_CheckpointRealism, which builds a throwaway table for a
+        /// training checkpoint the same way the promoted one is built.
+        /// </summary>
+        internal static bool WriteTable(string agentDir, string tablePath)
+        {
             Array groups = Enum.GetValues(typeof(Systems_BrainGroup));
             UnityEngine.Object[] models = new UnityEngine.Object[groups.Length];
 
@@ -66,20 +78,20 @@ namespace PoFootball.EditorTools
                 if (model == null)
                 {
                     Debug.LogError($"[BrainTable] missing {path}. Table not written.");
-                    return;
+                    return false;
                 }
 
                 models[index] = model;
             }
 
             Agent_BrainTable table = AssetDatabase.LoadAssetAtPath<Agent_BrainTable>(
-                TABLE_PATH);
+                tablePath);
             bool isNew = table == null;
 
             if (isNew)
             {
                 table = ScriptableObject.CreateInstance<Agent_BrainTable>();
-                AssetDatabase.CreateAsset(table, TABLE_PATH);
+                AssetDatabase.CreateAsset(table, tablePath);
             }
 
             SerializedObject serialized = new SerializedObject(table);
@@ -102,9 +114,11 @@ namespace PoFootball.EditorTools
             AssetDatabase.SaveAssets();
 
             Debug.Log(
-                $"[BrainTable] {(isNew ? "created" : "updated")} {TABLE_PATH} — "
+                $"[BrainTable] {(isNew ? "created" : "updated")} {tablePath} — "
                 + $"{groups.Length} brains from {agentDir}, contract revision "
                 + $"{Agent_ActionContract.CONTRACT_REVISION}.");
+
+            return true;
         }
 
         /// <summary>
