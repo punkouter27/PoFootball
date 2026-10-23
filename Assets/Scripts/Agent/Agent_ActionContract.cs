@@ -350,10 +350,40 @@ namespace PoFootball.Agents
         /// (Sensor_DefenseCallState), no continuous actions, one branch [9], one
         /// decision a play. The Defense brain goes back to [2], the pitch.
         /// Config/FootballBase18.yaml is this revision's config.
+        ///
+        /// Revision 17 (2026-10-22) changes what the two continuous actions MEAN,
+        /// with every shape identical — 50 observations, the same specs — so, like
+        /// 2, 5, 8, 9, 11, 12 and 13, only this number refuses an older brain:
+        ///
+        ///     Slots 0, 1   a throttle along the facing and a steering torque ->
+        ///                  a VELOCITY, forward and leftward in the body's frame at
+        ///                  the decision, at |command| x top speed, which
+        ///                  Agent_VelocityController turns into the same drive and
+        ///                  torque: it turns the body, tracks the speed, brakes when
+        ///                  asked for less (a throttle could only coast: 11 m from a
+        ///                  receiver's top speed), and backpedals facing forward
+        ///                  only up to BACKPEDAL_SPEED_FRACTION — negative drive
+        ///                  backpedalled at full sprint speed
+        ///     The pitch    the quarterback's release with no pass on pitches to the
+        ///                  nearest trailing man when nobody is along the aim
+        ///                  (Agent_ActionLegality.TryPitch). The mask enabled that
+        ///                  release on a nearest-man check and the aimed pitch then
+        ///                  refused it; Agent_ActionLegalityTests found it
+        ///
+        /// Forward stays slot 0 and leftward is slot 1 because that is the way
+        /// drive and positive steer pointed, so Config/FootballBase25.yaml can
+        /// start every brain from football_base24's weights: the shapes match and
+        /// the habits point the same way. It is still a different actuator, and
+        /// football_base24 can be promoted only from commit 5e53d25, revision 16.
+        /// The scripted players drive the same controller, so the scripted game
+        /// moved too and its realism must be re-measured on the four fixed seeds.
         /// </summary>
-        public const int CONTRACT_REVISION = 16;
+        public const int CONTRACT_REVISION = 17;
 
-        /// <summary>Continuous outputs every brain has: drive and steer.</summary>
+        /// <summary>
+        /// Continuous outputs every brain has: forward and leftward velocity
+        /// (revision 17; drive and steer before it).
+        /// </summary>
         public const int BASE_CONTINUOUS_ACTIONS = 2;
 
         /// <summary>

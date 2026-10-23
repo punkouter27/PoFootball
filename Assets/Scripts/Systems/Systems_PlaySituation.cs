@@ -40,6 +40,12 @@ namespace PoFootball.Systems
         /// <summary>On a kickoff, whether the kicking team goes short.</summary>
         public readonly bool OnsideKick;
 
+        /// <summary>
+        /// A training drill: the offense may only run this snap (the RUN_FIT lesson
+        /// of Systems_RandomSpotProvider). Never set by a played game.
+        /// </summary>
+        public readonly bool RunsOnly;
+
         public Systems_PlaySituation(float lineOfScrimmageY, int down, float yardsToGo)
             : this(lineOfScrimmageY, down, yardsToGo, Systems_PlayKind.Scrimmage, false)
         {
@@ -48,7 +54,15 @@ namespace PoFootball.Systems
         public Systems_PlaySituation(
             float lineOfScrimmageY, int down, float yardsToGo,
             Systems_PlayKind kind, bool onsideKick)
+            : this(lineOfScrimmageY, down, yardsToGo, kind, onsideKick, false)
         {
+        }
+
+        public Systems_PlaySituation(
+            float lineOfScrimmageY, int down, float yardsToGo,
+            Systems_PlayKind kind, bool onsideKick, bool runsOnly)
+        {
+            RunsOnly = runsOnly;
             LineOfScrimmageY = lineOfScrimmageY;
             Down = down;
             YardsToGo = yardsToGo;

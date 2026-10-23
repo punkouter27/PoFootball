@@ -269,7 +269,7 @@ namespace PoFootball.Systems
             _play.BeginEpisode(
                 lineOfScrimmageY, quarterback.Position.y,
                 situation.Down, situation.YardsToGo,
-                situation.Kind, situation.OnsideKick);
+                situation.Kind, situation.OnsideKick, situation.RunsOnly);
 
             // NOT SNAPPED HERE ANY MORE (revision 14). The teams stand set for
             // Systems_SimConstants.PRESNAP_TICKS first — that is when a kick can be

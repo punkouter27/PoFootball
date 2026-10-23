@@ -89,7 +89,7 @@ results/<run-id>/MANIFEST.md   one per run — records --num-envs, which is part
 ```
 
 **`Assets/Agents/Football_v02` is promoted but REFUSED, so every player runs
-`Heuristic` until a revision 16 run (`football_base23`) is promoted.** v02 came from
+`Heuristic` until a revision 17 run (`football_base25`) is promoted.** v02 came from
 `football_base14` (contract revision 12, 2026-10-03), a run cut short to 1.2M steps
 with a quarterback only 32k steps old and a defense that never learned to pursue
 (`results/football_base14/training_report.html`). It FAILED the realism gate at 6.80
@@ -127,7 +127,37 @@ To promote: train against a config for the CURRENT contract revision, run
 Editor. That last step is not optional — the Python side copies `.onnx` files but
 cannot write the ScriptableObject that lists them.
 
-**THE CURRENT REVISION IS 16, AND `Config/FootballBase23.yaml` IS ITS CONFIG.**
+**THE CURRENT REVISION IS 17, AND `Config/FootballBase25.yaml` IS ITS CONFIG
+(written 2026-10-22, NOT YET RUN).** Every shape is identical to revision 16; what
+moved is what the two continuous actions MEAN. They were a throttle along the facing
+and a steering torque, so a policy had to learn to turn a rotating body before it
+could go anywhere, and the defense never did (base22 at 13-15% of top speed; base24
+at 5 h: no sack, a touchdown on 28% of plays). They are now a VELOCITY — forward and
+leftward in the body's frame at the decision, at |command| × top speed — and
+`Agent_VelocityController` turns, tracks the speed, BRAKES when asked for less (a
+throttle could only coast: 11 m from a receiver's top speed) and backpedals facing
+forward up to `BACKPEDAL_SPEED_FRACTION` (0.6; negative drive used to backpedal at
+full sprint). Forces, damping and fatigue are unchanged. The scripted players drive
+the same controller — `Steer` asks for a direction now — so **the scripted game moved
+too and its realism must be re-measured on the four fixed seeds**. Also revision 17:
+the quarterback's release with no pass on pitches to the nearest trailing man when
+nobody is along the aim (`Agent_ActionLegality.TryPitch`); the mask enabled that
+release and the aimed pitch then refused it, found by `Agent_ActionLegalityTests`.
+The mask and the handlers now read one set of pure predicates (`Agent_ActionLegality`).
+Slot 0 stays forward and slot 1 is leftward because that is how drive and positive
+steer pointed, so `FootballBase25` warm-starts Offense, Quarterback and DefenseCall
+from `football_base24` by `init_path`; the Defense brain starts FRESH, because
+base24's was still passive (no sack, touchdowns on 39% of plays at 5.5 h) and was
+never promoted. **`football_base24` is a revision 16 run: promote or realism-check it
+only from commit `5e53d25`.** FootballBase25 opens with a RUN-FIT DRILL
+(`spot_lesson` 3, `Systems_RandomSpotProvider.LESSON_RUN_FIT`: downs 1-3, every pass
+masked and refused) and graduates to FullGame when the DefenseCall brain — paid
+exactly the defense's terminal reward — averages 0.25 over 1000+ plays. Its header
+has the numbers. Rebuild `Builds/FootballEnv` before it: a stale revision 16 env is
+not refused by the handshake.
+
+Revision 16's own history follows. **Revision 16's config was
+`Config/FootballBase23.yaml`/`FootballBase24.yaml`.**
 (`FootballBase18`, archived, was its first: `football_base18` kept the front spread
 but its flag rate climbed from 4% to 12% of plays, because training priced a flag
 at a flat 0.15 while a completion pays 0.45. `Systems_FoulPrice` now charges each
@@ -410,7 +440,7 @@ no pursuit reward while the ball is in the air.
 
 Every config for an older contract is in `Config/archive/`, including
 FootballBase06-12 and 14-22, FootballLong01 and the six `experiments/`
-variants. Until a revision 16 run is promoted, every player is a heuristic.
+variants. Until a revision 17 run is promoted, every player is a heuristic.
 
 **Judge balance on fixed seeds.** Games with a pinned seed (`Systems_GameLifetimeScope
 ._varySeedPerGame` off, `_episodeSeed` set) replay exactly, and today's single

@@ -191,6 +191,46 @@ namespace PoFootball.Tests
         }
 
         [Test]
+        public void TheRunFitLesson_SnapsOnlyScrimmageDownsTheOffenseMustRun()
+        {
+            Systems_EpisodeSeed.Set(7u);
+            Systems_RandomSpotProvider provider = new Systems_RandomSpotProvider();
+            provider.SetLessonSource(new FixedLesson(Systems_RandomSpotProvider.LESSON_RUN_FIT));
+
+            for (int episode = 0; episode < 500; episode++)
+            {
+                Systems_PlaySituation situation = provider.NextSituation();
+
+                Assert.That(situation.Kind, Is.EqualTo(Systems_PlayKind.Scrimmage));
+                Assert.That(situation.RunsOnly, Is.True);
+                Assert.That(situation.Down, Is.InRange(1, Systems_GameRules.DOWNS_PER_SERIES - 1));
+            }
+        }
+
+        [Test]
+        public void NoOtherLesson_IsARunFitDrill()
+        {
+            int[] lessons =
+            {
+                Systems_RandomSpotProvider.LESSON_RED_ZONE,
+                Systems_RandomSpotProvider.LESSON_OPEN_FIELD,
+                Systems_RandomSpotProvider.LESSON_FULL,
+            };
+
+            foreach (int lesson in lessons)
+            {
+                Systems_EpisodeSeed.Set(7u);
+                Systems_RandomSpotProvider provider = new Systems_RandomSpotProvider();
+                provider.SetLessonSource(new FixedLesson(lesson));
+
+                for (int episode = 0; episode < 200; episode++)
+                {
+                    Assert.That(provider.NextSituation().RunsOnly, Is.False, $"lesson {lesson}");
+                }
+            }
+        }
+
+        [Test]
         public void EpisodeSeed_RejectsZeroBecauseTheGeneratorDoes()
         {
             Systems_EpisodeSeed.Set(0u);

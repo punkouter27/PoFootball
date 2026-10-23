@@ -388,6 +388,41 @@ namespace PoFootball.Models
         /// <summary>Collider radius. Also the lever arm in the moment of inertia.</summary>
         public const float PLAYER_RADIUS = 0.5f;
 
+        // --- The velocity controller (revision 17) ----------------------------
+        //
+        // A brain's two continuous outputs are a VELOCITY — where to go and how fast,
+        // in the body's frame at the decision — not a throttle and a steering
+        // torque. Agent_VelocityController turns it into the same drive and torque
+        // the body has always been pushed by, so every force limit, damping and
+        // fatigue term is unchanged; what moved is who does the turning. See
+        // Agent_ActionContract revision 17.
+
+        /// <summary>
+        /// Fastest a player can move BACKWARDS while still facing forward, as a
+        /// share of his top speed. A corner's backpedal is about six tenths of his
+        /// sprint; through revision 16 negative drive backpedalled at full speed.
+        /// Asked for more than this behind him, a player turns and runs instead.
+        /// </summary>
+        public const float BACKPEDAL_SPEED_FRACTION = 0.6f;
+
+        /// <summary>
+        /// Proportional gain on forward-speed error, as drive per unit of top
+        /// speed. At 4 a body a quarter of its top speed short of the target is at
+        /// full drive, so a sprint request reaches top speed exactly as fast as full
+        /// throttle did; above the target it brakes with the same force, which a
+        /// throttle never could — coasting from a receiver's top speed took 11 m.
+        /// </summary>
+        public const float SPEED_TRACKING_GAIN = 4f;
+
+        /// <summary>
+        /// Heading error at which steering is at full lock — the scripted players'
+        /// Steer used 45 since revision 1, with ANGULAR_DAMPING as the derivative.
+        /// </summary>
+        public const float HEADING_FULL_LOCK_DEGREES = 45f;
+
+        /// <summary>A command shorter than this is "stand": brake, hold the facing.</summary>
+        public const float VELOCITY_COMMAND_DEADZONE = 0.05f;
+
         // --- Player traits (revision 14) -------------------------------------
         /// <summary>
         /// How far one athlete's top speed can sit from his role's, as a fraction:

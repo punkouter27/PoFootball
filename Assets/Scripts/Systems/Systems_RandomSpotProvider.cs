@@ -45,6 +45,19 @@ namespace PoFootball.Systems
         /// <summary>Anywhere, any down — the distribution every run before had.</summary>
         public const int LESSON_FULL = 2;
 
+        /// <summary>
+        /// THE RUN FIT DRILL (Config/FootballBase25.yaml): anywhere on the field,
+        /// first to third down, and the offense may only RUN — every snap puts a
+        /// ball carrier in front of the defense, which is the one thing a passive
+        /// defense never practises. football_base22's defenders moved at 13-15% of
+        /// top speed with a carrier ten yards downfield and recorded no sack in
+        /// three million steps; base24 at five hours still had none and a
+        /// touchdown on 28% of plays. Numbered after FULL rather than before it so
+        /// every existing config keeps its meaning; the config orders the lessons.
+        /// Same five draws as every lesson, so a seed's sequence is unchanged.
+        /// </summary>
+        public const int LESSON_RUN_FIT = 3;
+
         private const float RED_ZONE_YARDS = 20f;
 
         /// <summary>
@@ -119,6 +132,7 @@ namespace PoFootball.Systems
                 : Systems_FieldModel.LOS_MIN_Y;
 
             int lastDown = lesson == LESSON_RED_ZONE || lesson == LESSON_OPEN_FIELD
+                || lesson == LESSON_RUN_FIT
                 ? Systems_GameRules.DOWNS_PER_SERIES - 1
                 : Systems_GameRules.DOWNS_PER_SERIES;
 
@@ -149,7 +163,8 @@ namespace PoFootball.Systems
                     return Try(kind, Systems_GameRules.TWO_POINT_YARD_LINE);
 
                 default:
-                    return new Systems_PlaySituation(lineOfScrimmageY, down, yardsToGo);
+                    return new Systems_PlaySituation(
+                        lineOfScrimmageY, down, yardsToGo, kind, false, lesson == LESSON_RUN_FIT);
             }
         }
 

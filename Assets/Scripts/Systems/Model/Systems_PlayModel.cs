@@ -219,6 +219,14 @@ namespace PoFootball.Models
         /// </summary>
         public int Down { get; private set; } = 1;
 
+        /// <summary>
+        /// A training drill: no pass may be called this snap, so every play puts a
+        /// ball carrier in front of the defense (Systems_RandomSpotProvider
+        /// .LESSON_RUN_FIT). LatchCall refuses a pass and the quarterback's mask
+        /// never offers one. Always false in a played game.
+        /// </summary>
+        public bool RunsOnly { get; private set; }
+
         /// <summary>Yards needed for a new series from this snap.</summary>
         public float YardsToGo { get; private set; } = Systems_GameRules.YARDS_TO_GAIN;
 
@@ -240,6 +248,14 @@ namespace PoFootball.Models
             float lineOfScrimmageY, float ballY, int down, float yardsToGo,
             Systems_PlayKind kind, bool onsideKick)
         {
+            BeginEpisode(lineOfScrimmageY, ballY, down, yardsToGo, kind, onsideKick, false);
+        }
+
+        public void BeginEpisode(
+            float lineOfScrimmageY, float ballY, int down, float yardsToGo,
+            Systems_PlayKind kind, bool onsideKick, bool runsOnly)
+        {
+            RunsOnly = runsOnly;
             Phase = Systems_PlayPhase.PreSnap;
             Outcome = Systems_PlayOutcome.None;
             Call = Systems_PlayCall.None;
@@ -343,7 +359,7 @@ namespace PoFootball.Models
                 return;
             }
 
-            if (isKick || Kind == Systems_PlayKind.Kickoff)
+            if (isKick || Kind == Systems_PlayKind.Kickoff || (RunsOnly && call.IsPass()))
             {
                 return;
             }

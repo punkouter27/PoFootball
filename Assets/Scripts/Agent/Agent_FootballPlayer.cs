@@ -102,6 +102,16 @@ namespace PoFootball.Agents
         private float _speedSum;
         private float _previousSteerCommand;
         private int _effortTicks;
+
+        /// <summary>
+        /// Mean change in the velocity COMMAND from one decision to the next
+        /// (revision 17). SteerJerk now measures the controller's output, which is
+        /// smooth by construction; this is what the policy itself asked for, and
+        /// chatter there is the thing worth seeing.
+        /// </summary>
+        private float _commandJerkSum;
+        private int _commandDecisions;
+        private Vector2 _previousCommand;
         private int _speedClampHits;
 
         // Mean size of the drive command and how often it sits at the rail, PER
@@ -216,6 +226,15 @@ namespace PoFootball.Agents
         private bool _hasQuarterbackActions;
 
         /// <summary>
+        /// The body's facing when this decision's observations were written: the
+        /// frame its velocity command is in, held for the ticks it is repeated.
+        /// </summary>
+        private Vector2 _commandFrameUp = Vector2.up;
+
+        /// <summary>A decision arrived and its first tick has not been applied yet.</summary>
+        private bool _isFreshCommand;
+
+        /// <summary>
         /// Whether this is the one defender whose call branch is read. The other
         /// ten carry the branch because they share the brain, pinned to "no call".
         /// </summary>
@@ -267,6 +286,9 @@ namespace PoFootball.Agents
         private int _callSheetEpisode = -1;
 
         private readonly float[] _callChances = new float[Systems_CallSheet.CALL_SLOTS];
+
+        /// <summary>The play-call mask, rewritten every decision; see WriteDiscreteActionMask.</summary>
+        private readonly bool[] _callMask = new bool[Agent_ActionLegality.CALL_BRANCH_SIZE];
 
         private readonly int[] _callCounts =
             new int[Sensor_FootballState.PLAY_CALL_BRANCH_SIZE];
@@ -662,6 +684,11 @@ namespace PoFootball.Agents
 
         public override void CollectObservations(VectorSensor sensor)
         {
+            // The frame the velocity command of this decision is read in: the
+            // body's, as the observations below are written (revision 17).
+            _commandFrameUp = Facing;
+            _isFreshCommand = true;
+
             Vector2 position = Position;
             bool hasPlay = _play != null;
             bool hasBall = _ball != null;
@@ -753,128 +780,34 @@ namespace PoFootball.Agents
                 return;
             }
 
-            if (CanCallKickNow())
+            // Revision 17: the one authority both this mask and the handlers read,
+            // where Agent_ActionLegalityTests can hold them to each other.
+            Agent_ActionLegality.WriteCallMask(_play, _callMask);
+
+            for (int callIndex = 0; callIndex < _callMask.Length; callIndex++)
             {
-                // BEFORE THE SNAP, ON FOURTH DOWN: kick, or not. None means "line up
-                // and go for it"; every scrimmage call waits for the dropback.
-                bool isInRange = IsInFieldGoalRange();
-
-                for (int callIndex = 1; callIndex < Sensor_FootballState.PLAY_CALL_BRANCH_SIZE; callIndex++)
-                {
-                    Systems_PlayCall call = (Systems_PlayCall)callIndex;
-
-                    bool allowed = call == Systems_PlayCall.Punt
-                        || (call == Systems_PlayCall.FieldGoal && isInRange);
-
-                    actionMask.SetActionEnabled(PLAY_CALL_BRANCH, callIndex, allowed);
-                }
-            }
-            else if (!IsInCallLatchWindow())
-            {
-                for (int callIndex = 1; callIndex < Sensor_FootballState.PLAY_CALL_BRANCH_SIZE; callIndex++)
-                {
-                    actionMask.SetActionEnabled(PLAY_CALL_BRANCH, callIndex, false);
-                }
-            }
-            else
-            {
-                // AT THE DROPBACK: a scrimmage call, which must be made now. Kicks
-                // were a pre-snap decision and are no longer on offer.
-                actionMask.SetActionEnabled(
-                    PLAY_CALL_BRANCH, (int)Systems_PlayCall.None, false);
-
-                actionMask.SetActionEnabled(
-                    PLAY_CALL_BRANCH, (int)Systems_PlayCall.Punt, false);
-
-                actionMask.SetActionEnabled(
-                    PLAY_CALL_BRANCH, (int)Systems_PlayCall.FieldGoal, false);
+                actionMask.SetActionEnabled(PLAY_CALL_BRANCH, callIndex, _callMask[callIndex]);
             }
 
             actionMask.SetActionEnabled(
                 THROW_BRANCH, THROW_RELEASE, CanReleasePass() || CanLateral());
         }
 
-        /// <summary>
-        /// Whether a decision taken now can latch a pre-snap kick: fourth down, set,
-        /// and inside the call window with a decision period to spare.
-        /// </summary>
-        private bool CanCallKickNow()
-        {
-            return _play.CanCallKick
-                && _play.PreSnapTick + Systems_SimConstants.DECISION_PERIOD
-                    < Systems_SimConstants.KICK_CALL_WINDOW_TICKS;
-        }
-
-        /// <summary>
-        /// Whether a decision taken now can be the one that latches the call: no call
-        /// yet, and its actions will still be applied on or after DROPBACK_TICKS.
-        ///
-        /// Two decision periods of margin rather than one, because the referee's
-        /// tick counter and the Academy's step are not guaranteed to advance in a
-        /// fixed order within a FixedUpdate. Erring early costs one extra unpinned
-        /// sample; erring late would pin the latching decision to None and push the
-        /// call a whole decision past the dropback.
-        /// </summary>
-        private bool IsInCallLatchWindow()
-        {
-            return _play.Phase == Systems_PlayPhase.Live
-                && !_play.CallIsLatched
-                && _play.Kind.HasLiveCall()
-                && _play.PhysicsTick + (2 * Systems_SimConstants.DECISION_PERIOD)
-                    > Systems_SimConstants.DROPBACK_TICKS;
-        }
-
-        /// <summary>
-        /// Whether this player may pitch the ball right now: carrying it, live, with
-        /// a team-mate level or behind inside range. The one authority for both the
-        /// mask and the action, as CanReleasePass is for the throw.
-        /// </summary>
+        /// <summary>See <see cref="Agent_ActionLegality.CanLateral"/>.</summary>
         private bool CanLateral()
         {
-            return _isCarrier
-                && _play != null
-                && _play.Phase == Systems_PlayPhase.Live
-                && _ball != null
-                && _ball.IsHeld
-                && _ball.CarrierId == _formationSlotIndex
-                && _ballSystem != null
-                && !_ballSystem.IsKickoffNotYetKicked()
-                && _ballSystem.ResolveLateralTarget(this, Vector2.zero) != null;
+            return Agent_ActionLegality.CanLateral(_play, _ball, _ballSystem, this);
         }
 
-        /// <summary>
-        /// Every condition under which a pass may leave the quarterback's hand. The
-        /// one authority for both the throw mask and HandleQuarterback, so the two
-        /// cannot disagree about what is legal.
-        /// </summary>
+        /// <summary>See <see cref="Agent_ActionLegality.CanReleasePass"/>.</summary>
         private bool CanReleasePass()
         {
-            return _play.Call.IsPass()
-                && _play.Phase == Systems_PlayPhase.Live
-                && _play.Kind != Systems_PlayKind.Spike
-                && !_play.ForwardPassThrown
-                && _isCarrier
-                && _ball != null
-                && _ball.IsHeld
-                && _ball.CarrierId == _formationSlotIndex
-                && _play.PhysicsTick <= Systems_SimConstants.THROW_WINDOW_TICKS
-                // A FORWARD PASS MUST BE THROWN FROM BEHIND THE LINE OF SCRIMMAGE,
-                // and there is only one. Past the line the quarterback has tucked it
-                // and is a runner; the mask makes an illegal forward pass impossible
-                // rather than a foul waiting to be flagged.
-                && Position.y <= _play.LineOfScrimmageY;
+            return Agent_ActionLegality.CanReleasePass(_play, _ball, this);
         }
 
-        /// <summary>
-        /// Distance to the goal line plus the seventeen yards every real field goal
-        /// carries — ten of end zone and seven back to the hold.
-        /// </summary>
         private bool IsInFieldGoalRange()
         {
-            float yardsToGoalLine = Systems_FieldModel.YardsToAttackingGoal(_play.LineOfScrimmageY);
-
-            return yardsToGoalLine + Systems_GameRules.FIELD_GOAL_SNAP_YARDS
-                <= Systems_GameRules.FIELD_GOAL_MAX_YARDS;
+            return Agent_ActionLegality.IsInFieldGoalRange(_play);
         }
 
         public override void OnActionReceived(ActionBuffers actions)
@@ -908,8 +841,17 @@ namespace PoFootball.Agents
 
             ActionSegment<float> continuous = actions.ContinuousActions;
 
-            float drive = Mathf.Clamp(continuous[0], -1f, 1f);
-            float steer = Mathf.Clamp(continuous[1], -1f, 1f);
+            // REVISION 17: A VELOCITY, NOT A THROTTLE AND A TORQUE. Forward and
+            // leftward in the frame the observations were written in, resolved into
+            // the same drive and torque as ever. See Agent_VelocityController.
+            Vector2 command = new Vector2(
+                Mathf.Clamp(continuous[0], -1f, 1f), Mathf.Clamp(continuous[1], -1f, 1f));
+
+            Agent_VelocityController.Resolve(
+                command, _commandFrameUp, Facing, Velocity, _topSpeed,
+                out float drive, out float steer);
+
+            AccumulateCommandJerk(command);
 
             float fatigueScale = 1f - (_fatigue * Systems_SimConstants.FATIGUE_MAX_PENALTY);
             float driveForce = drive * _driveForce * fatigueScale;
@@ -1126,9 +1068,13 @@ namespace PoFootball.Agents
 
             // NO PASS ON — A PITCH, IF THERE IS A MAN TO PITCH TO (revision 14). The
             // option, a fake punt, a scramble that runs out of room.
+            //
+            // Along the aim, or to the nearest trailing man if nobody is along it
+            // (revision 17): the mask enabled this release on CanLateral, which
+            // looks for the nearest, so the release has to be able to find him.
             if (CanLateral())
             {
-                _ballSystem.TryLateral(this, aim);
+                Agent_ActionLegality.TryPitch(_ballSystem, this, aim);
             }
         }
 
@@ -1167,6 +1113,24 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
+        /// Once per decision, on its first applied tick: how far the command moved
+        /// from the previous decision's. A play's first decision is measured from
+        /// standing, which is honest — starting to run IS a change of command.
+        /// </summary>
+        private void AccumulateCommandJerk(Vector2 command)
+        {
+            if (!_isFreshCommand)
+            {
+                return;
+            }
+
+            _isFreshCommand = false;
+            _commandJerkSum += (command - _previousCommand).magnitude;
+            _previousCommand = command;
+            _commandDecisions++;
+        }
+
+        /// <summary>
         /// Writes the control-effort KPIs for the play that just ended, then clears
         /// them for the next one.
         ///
@@ -1196,6 +1160,12 @@ namespace PoFootball.Agents
                 // near 0; full-scale chatter approaches 2.
                 stats.Add("Control/SteerJerk", _steerJerkSum / ticks);
 
+                // Mean change in the velocity command between decisions, 0 to 2.8.
+                if (_commandDecisions > 0)
+                {
+                    stats.Add("Control/CommandJerk", _commandJerkSum / _commandDecisions);
+                }
+
                 // Mean speed as a fraction of this role's top speed. The closest
                 // thing here to velocity tracking: it says whether players are
                 // actually running or milling about.
@@ -1219,6 +1189,9 @@ namespace PoFootball.Agents
             _speedSum = 0f;
             _previousSteerCommand = 0f;
             _effortTicks = 0;
+            _commandJerkSum = 0f;
+            _commandDecisions = 0;
+            _previousCommand = Vector2.zero;
             _speedClampHits = 0;
             _driveCommandSum = 0f;
             _driveSaturatedTicks = 0;
@@ -1765,10 +1738,10 @@ namespace PoFootball.Agents
         /// downs, safeties) so a playthrough is worth watching and a bug in the
         /// game layer has somewhere to show itself.
         ///
-        /// STEERING IS CAR-LIKE, because that is what OnActionReceived implements:
-        /// drive pushes along the body's own up axis and steer is a torque. Aiming
-        /// at a point therefore means turning toward it first and only driving hard
-        /// once roughly lined up, or the body spirals.
+        /// STEERING IS A VELOCITY since revision 17: Steer asks for a direction and
+        /// a speed, and Agent_VelocityController — the same actuator every trained
+        /// brain drives — does the turning. Through revision 16 the body was
+        /// car-like at the action level and this method had to turn it by hand.
         /// </summary>
         public override void Heuristic(in ActionBuffers actionsOut)
         {
@@ -2405,11 +2378,15 @@ namespace PoFootball.Agents
         }
 
         /// <summary>
-        /// Turns a world-space destination into drive and steer.
+        /// Turns a world-space destination into a velocity command: toward it, at
+        /// full speed, in the body's frame (revision 17).
         ///
-        /// Drive is scaled by how well the body is already pointing at the target,
-        /// so a player that needs to turn around rotates on the spot instead of
-        /// driving away at full force while it does.
+        /// The turning is Agent_VelocityController's now — it used to be here, nine
+        /// lines that scaled drive by alignment so a player turning around rotated on
+        /// the spot instead of driving off. The scripted players keep it by asking
+        /// for a direction like everybody else, and a zone defender easing onto his
+        /// spot asks for less than BACKPEDAL_SPEED_FRACTION, so one settling onto a
+        /// spot behind him backpedals into it, which is what a zone drop is.
         /// </summary>
         private void Steer(ActionSegment<float> continuousActions, Vector2 target)
         {
@@ -2420,25 +2397,21 @@ namespace PoFootball.Agents
                 return;
             }
 
-            // Signed angle from the body's facing to the target, in degrees.
-            float error = Vector2.SignedAngle(_transform.up, toTarget.normalized);
-
-            // Full lock at 45 degrees off. Proportional-only is enough here: the
-            // rigidbody's angular drag supplies the damping a derivative term
-            // would, and a player that overshoots slightly still reads as a player.
-            continuousActions[1] = Mathf.Clamp(error / 45f, -1f, 1f);
-
-            float alignment = Mathf.Cos(error * Mathf.Deg2Rad);
-            float drive = Mathf.Clamp01(alignment);
+            float throttle = 1f;
 
             // Ease off approaching a spot that is not going anywhere, so the body
             // settles onto it instead of oscillating across it.
             if (_settleRadius > 0f)
             {
-                drive *= Mathf.Clamp01(toTarget.magnitude / _settleRadius);
+                throttle = Mathf.Clamp01(toTarget.magnitude / _settleRadius);
             }
 
-            continuousActions[0] = drive;
+            Vector2 up = Facing;
+            Vector2 left = new Vector2(-up.y, up.x);
+            Vector2 command = toTarget.normalized * throttle;
+
+            continuousActions[0] = Vector2.Dot(command, up);
+            continuousActions[1] = Vector2.Dot(command, left);
         }
 
         /// <summary>
@@ -2783,6 +2756,12 @@ namespace PoFootball.Agents
             // the same plays IsDeepShotPlay always picked, so the scripted offense
             // throws deep exactly as often as it did when "deep" was something the
             // quarterback decided after calling Pass.
+            // The run-fit drill offers no pass; the scripted caller hands off instead.
+            if (_play.RunsOnly && call.IsPass())
+            {
+                return Systems_PlayCall.HandoffHalfback;
+            }
+
             return call == Systems_PlayCall.Pass && IsDeepShotPlay()
                 ? Systems_PlayCall.PassDeep
                 : call;
