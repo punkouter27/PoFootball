@@ -86,7 +86,7 @@ behaviors:
 
     keep_checkpoints: 20
     checkpoint_interval: 100000
-    max_steps: 8000000
+    max_steps: 16000000           # was 8M; Defense hit it at 21:00 2026-10-23 and stopped updating ("Not Training"). Raised for the 10-hour stretch; learning rates are constant, so no schedule moves.
 
     # One whole play: (MAX_PHYSICS_TICKS 600 + PRESNAP_TICKS 20) / DECISION_PERIOD 5.
     # Pinned by Systems_ContractTests.
@@ -103,7 +103,7 @@ behaviors:
     <<: *football_brain
     init_path: null                 # was football_base24's; cleared for --resume, which init_path overrides
     trainer_type: ppo
-    max_steps: 800000
+    max_steps: 1600000            # was 800k, raised with the others (2026-10-23)
     checkpoint_interval: 10000
     hyperparameters:
       batch_size: 256
@@ -121,7 +121,7 @@ behaviors:
     <<: *football_brain
     init_path: null                 # was football_base24's; cleared for --resume, which init_path overrides
     trainer_type: ppo
-    max_steps: 16000
+    max_steps: 40000              # was 16k, raised with the others (2026-10-23)
     checkpoint_interval: 1000
     summary_freq: 1000
     time_horizon: 8                 # every episode is one step
