@@ -45,7 +45,7 @@ namespace PoFootball.Views
     public sealed class Systems_ReplayView : Systems_ScreenView, Systems_IInjectableView
     {
         /// <summary>
-        /// Above Systems_HudView (0), below Systems_StatusHudView (300). The reel's button has to draw over the
+        /// Above Systems_HudView (0), below Systems_StatusHudView (300). The reel's card has to draw over the
         /// final scrim; the five-corner chrome has to draw over the reel.
         /// </summary>
         private const float PANEL_SORT_ORDER = 200f;
@@ -73,12 +73,15 @@ namespace PoFootball.Views
         private ISubscriber<Systems_PlaySnappedMessage> _snappedSubscriber;
         private ISubscriber<Systems_GameOverMessage> _gameOverSubscriber;
         private IPublisher<Systems_HighlightPlaybackMessage> _highlightPublisher;
+        private IPublisher<Systems_HighlightsReadyMessage> _readyPublisher;
+        private ISubscriber<Systems_OpenHighlightsMessage> _openSubscriber;
 
         private IDisposable _tackleSubscription;
 
         private IDisposable _resolvedSubscription;
         private IDisposable _snappedSubscription;
         private IDisposable _gameOverSubscription;
+        private IDisposable _openSubscription;
 
         private Systems_IPlayerHandle[] _handles;
         private SpriteRenderer[] _renderers;
@@ -131,7 +134,9 @@ namespace PoFootball.Views
             ISubscriber<Systems_DownResolvedMessage> resolvedSubscriber,
             ISubscriber<Systems_PlaySnappedMessage> snappedSubscriber,
             ISubscriber<Systems_GameOverMessage> gameOverSubscriber,
-            IPublisher<Systems_HighlightPlaybackMessage> highlightPublisher)
+            IPublisher<Systems_HighlightPlaybackMessage> highlightPublisher,
+            IPublisher<Systems_HighlightsReadyMessage> readyPublisher,
+            ISubscriber<Systems_OpenHighlightsMessage> openSubscriber)
         {
             _budget = budget;
             _play = play;
@@ -143,6 +148,8 @@ namespace PoFootball.Views
             _snappedSubscriber = snappedSubscriber;
             _gameOverSubscriber = gameOverSubscriber;
             _highlightPublisher = highlightPublisher;
+            _readyPublisher = readyPublisher;
+            _openSubscriber = openSubscriber;
         }
 
         protected override void Awake()
@@ -197,6 +204,7 @@ namespace PoFootball.Views
             _resolvedSubscription = _resolvedSubscriber?.Subscribe(OnDownResolved);
             _snappedSubscription = _snappedSubscriber?.Subscribe(OnSnapped);
             _gameOverSubscription = _gameOverSubscriber?.Subscribe(OnGameOver);
+            _openSubscription = _openSubscriber?.Subscribe(OnOpenHighlights);
         }
 
         private void FixedUpdate()
@@ -275,6 +283,9 @@ namespace PoFootball.Views
             _gameOverSubscription?.Dispose();
             _gameOverSubscription = null;
 
+            _openSubscription?.Dispose();
+            _openSubscription = null;
+
             // Normally already done by OnDisable; idempotent if so.
             StopHighlight();
 
@@ -291,6 +302,27 @@ namespace PoFootball.Views
         {
             _layer = Systems_UiTheme.Layer();
             Root.Add(_layer);
+        }
+
+        /// <summary>Android Back with a highlight on the field goes back to the result, as RESULT does.</summary>
+        internal override bool HandleBack()
+        {
+            if (_reel == null || !_reel.IsOpen)
+            {
+                return false;
+            }
+
+            _reel.Close();
+            return true;
+        }
+
+        /// <summary>The final sheet's HIGHLIGHTS tab. Nothing to open before the whistle.</summary>
+        private void OnOpenHighlights(Systems_OpenHighlightsMessage message)
+        {
+            if (_reel != null)
+            {
+                _reel.Open();
+            }
         }
 
         // --- Recording ------------------------------------------------------------
@@ -600,6 +632,9 @@ namespace PoFootball.Views
 
             if (count == 0)
             {
+                // Said anyway, so the final sheet knows there is no tab to offer
+                // rather than waiting for a message that never comes.
+                _readyPublisher?.Publish(new Systems_HighlightsReadyMessage(0));
                 return;
             }
 
@@ -622,6 +657,8 @@ namespace PoFootball.Views
 
             _layer.Insert(0, _reel.Root);
             _reel.Show();
+
+            _readyPublisher?.Publish(new Systems_HighlightsReadyMessage(_reel.Count));
         }
 
         /// <summary>

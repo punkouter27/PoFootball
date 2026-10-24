@@ -78,6 +78,33 @@ namespace PoFootball.Views
         /// <summary>Builds the screen's element tree into <see cref="Root"/>.</summary>
         protected abstract void BuildUi();
 
+        /// <summary>
+        /// Android Back (the Escape key everywhere else): close whatever this screen
+        /// has open on top of itself and return true, or return false to let the
+        /// press fall through to the screen beneath and, last, to the status HUD's
+        /// way out. Systems_StatusHudView asks the screens in panel order, topmost
+        /// first, so the sheet a viewer can see is the one Back closes.
+        /// </summary>
+        internal virtual bool HandleBack()
+        {
+            return false;
+        }
+
+        /// <summary>
+        /// The panel order this screen draws at; the order Back is offered in.
+        /// </summary>
+        internal float SortingOrder => _document == null ? 0f : _document.sortingOrder;
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// A notch and a home indicator for a test to put on the Game view, which
+        /// has neither: pixels taken off the top (x) and bottom (y) of the screen,
+        /// used in place of Screen.safeArea until set back to zero. Editor-only, so
+        /// no build can carry it; Systems_AspectSweepTests is the one writer.
+        /// </summary>
+        internal static Vector2 SimulatedInsetPixels { get; set; }
+#endif
+
         protected virtual void Awake()
         {
             _document = GetComponent<UIDocument>();
@@ -231,6 +258,15 @@ namespace PoFootball.Views
             Rect safeArea = UnityEngine.Screen.safeArea;
             Vector2Int screenSize = new Vector2Int(
                 UnityEngine.Screen.width, UnityEngine.Screen.height);
+
+#if UNITY_EDITOR
+            if (SimulatedInsetPixels != Vector2.zero)
+            {
+                safeArea = new Rect(
+                    0f, SimulatedInsetPixels.y, screenSize.x,
+                    screenSize.y - SimulatedInsetPixels.x - SimulatedInsetPixels.y);
+            }
+#endif
 
             if (safeArea == _lastSafeArea && screenSize == _lastScreenSize)
             {

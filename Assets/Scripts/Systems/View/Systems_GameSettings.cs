@@ -24,6 +24,7 @@ namespace PoFootball.Views
     {
         private const string SEED_FIXED_KEY = "PoFootball.Game.SeedFixed";
         private const string SEED_KEY = "PoFootball.Game.Seed";
+        private const string QB_CHALLENGE_BEST_KEY = "PoFootball.QbChallenge.Best";
 
         private const uint DEFAULT_SEED = 1u;
 
@@ -65,6 +66,26 @@ namespace PoFootball.Views
                 PlayerPrefs.SetString(SEED_KEY, _seed.ToString());
                 PlayerPrefs.Save();
             }
+        }
+
+        /// <summary>The most points the human has scored in one QB challenge.</summary>
+        public static int QbChallengeBest => PlayerPrefs.GetInt(QB_CHALLENGE_BEST_KEY, 0);
+
+        /// <summary>
+        /// Records a finished QB challenge and returns the best BEFORE it, so the
+        /// caller can tell a new best from a tie with the old one.
+        /// </summary>
+        public static int RecordQbChallengeScore(int points)
+        {
+            int previousBest = QbChallengeBest;
+
+            if (points > previousBest)
+            {
+                PlayerPrefs.SetInt(QB_CHALLENGE_BEST_KEY, points);
+                PlayerPrefs.Save();
+            }
+
+            return previousBest;
         }
 
         /// <summary>What to ask the next game for: the fixed seed, or zero for "draw one".</summary>

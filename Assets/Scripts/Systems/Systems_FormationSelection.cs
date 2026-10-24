@@ -109,6 +109,16 @@ namespace PoFootball.Systems
         }
 
         /// <summary>
+        /// Replaces the drawn alignment with the one a human quarterback's play
+        /// card names (Systems_QbChallengeSystem). As with the defense's call, the
+        /// draw still happened, so the stream is unchanged by anybody choosing.
+        /// </summary>
+        public void CallOffense(Systems_OffensiveFormation formation)
+        {
+            Offense = formation;
+        }
+
+        /// <summary>
         /// The kind of snap whose special-teams alignment is on the field, or
         /// Scrimmage when it is an ordinary one. Revision 14.
         /// </summary>

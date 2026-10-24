@@ -14,6 +14,9 @@ namespace PoFootball.Models
     /// distance and none of them read the height of a thrown ball. It exists so a
     /// pass reads as going OVER the players between thrower and receiver instead of
     /// sliding through them, which in a top-down view is otherwise impossible to see.
+    /// The one exception is the QB challenge's pass to a spot (ThrowToSpot): the
+    /// human threw it at the grass, not at a man, so whether it is over a head is
+    /// the whole of who can catch it, and the height decides that.
     ///
     /// A KICKED BALL IS DIFFERENT, and that is revision 14. A punt that hangs four
     /// seconds is not catchable for most of those four seconds, and whether a field
@@ -150,6 +153,39 @@ namespace PoFootball.Models
             // rather than every pass rainbowing identically.
             Height = 0f;
             VerticalVelocity = velocity.magnitude * Systems_SimConstants.PASS_LOFT_RATIO;
+            HasLandingSpot = false;
+        }
+
+        /// <summary>
+        /// THE QB CHALLENGE'S PASS TO A SPOT: thrown with the climb that brings it
+        /// back to the turf exactly on <paramref name="landingSpot"/>, so for this
+        /// ball the height is real — Systems_BallSystem lets nobody catch it while
+        /// it is over their heads, and rules it incomplete where it comes down.
+        /// </summary>
+        public void ThrowToSpot(
+            int throwerId, Vector2 origin, Vector2 velocity, float verticalSpeed,
+            Vector2 landingSpot, int landingTicks)
+        {
+            Throw(throwerId, origin, velocity, Systems_PassKind.Forward);
+            VerticalVelocity = verticalSpeed;
+            LandingSpot = landingSpot;
+            LandingTicks = landingTicks;
+            HasLandingSpot = true;
+        }
+
+        /// <summary>Where a pass thrown to a spot comes down. Meaningful only while <see cref="HasLandingSpot"/>.</summary>
+        public Vector2 LandingSpot { get; private set; }
+
+        /// <summary>Flight ticks until it is down there.</summary>
+        public int LandingTicks { get; private set; }
+
+        private bool _hasLandingSpot;
+
+        /// <summary>A pass to a spot is in the air.</summary>
+        public bool HasLandingSpot
+        {
+            get => _hasLandingSpot && State == Systems_BallState.InFlight;
+            private set => _hasLandingSpot = value;
         }
 
         /// <summary>

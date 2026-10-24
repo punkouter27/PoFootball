@@ -48,6 +48,13 @@ namespace PoFootball.Systems
         /// <summary>A defender nearest the ball: does he catch it or bat it down.</summary>
         bool IsInterceptionHeld();
 
+        /// <summary>
+        /// The same, at a caller's chance rather than INTERCEPTION_HOLD_CHANCE: the
+        /// QB challenge's softer rule for a pass the human aimed at a receiver
+        /// (Systems_BallSystem.IsCatchMade).
+        /// </summary>
+        bool IsInterceptionHeld(float holdChance);
+
         /// <summary>A hit over TACKLE_CLOSING_SPEED: does it bring the carrier down.</summary>
         bool IsHitTackleMade(
             Systems_PlayerRole carrier, float tacklerFatigue, float carrierFatigue);
@@ -147,7 +154,12 @@ namespace PoFootball.Systems
 
         public bool IsInterceptionHeld()
         {
-            return _rng.NextFloat() < Systems_SimConstants.INTERCEPTION_HOLD_CHANCE;
+            return IsInterceptionHeld(Systems_SimConstants.INTERCEPTION_HOLD_CHANCE);
+        }
+
+        public bool IsInterceptionHeld(float holdChance)
+        {
+            return _rng.NextFloat() < holdChance;
         }
 
         public bool IsHitTackleMade(

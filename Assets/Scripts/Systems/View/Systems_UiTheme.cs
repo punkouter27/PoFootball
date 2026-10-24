@@ -659,6 +659,52 @@ namespace PoFootball.Views
             }
         }
 
+        // --- Tabs ---------------------------------------------------------------
+
+        /// <summary>
+        /// One tab of a sheet's tab row: an equal share of the row's width, body
+        /// type. Moved here from Systems_MenuView when the final sheet grew tabs of
+        /// its own — two copies of a tab is how the two sheets would have come to
+        /// disagree about what a selected tab looks like.
+        /// </summary>
+        public static Button Tab(string label, System.Action onClick)
+        {
+            Button tab = Button(label, SurfaceOverField, onClick);
+            tab.style.flexGrow = 1f;
+            tab.style.flexBasis = 0f;
+            tab.style.fontSize = TEXT_BODY;
+            return tab;
+        }
+
+        /// <summary>
+        /// The selected tab takes the action tint — it is the sheet's title — and
+        /// the others drop back to chrome. Panes are the caller's: the settings
+        /// sheet swaps them by display, the final sheet by visibility, for reasons
+        /// each gives.
+        /// </summary>
+        public static void PaintTab(Button tab, bool isSelected)
+        {
+            tab.style.backgroundColor = isSelected ? Action : SurfaceOverField;
+            tab.style.color = isSelected ? SurfaceRaised : TextPrimary;
+        }
+
+        // --- Reach --------------------------------------------------------------
+
+        /// <summary>
+        /// Marks a control, or a container of controls, as allowed in the top of
+        /// the screen where a thumb does not reach. Systems_UiFitAudit reports any
+        /// other enabled button up there as OUT OF REACH.
+        ///
+        /// A class name and not a field, because the audit walks whatever tree is
+        /// on screen and a class is the one thing every element can carry. There is
+        /// no USS behind it (CLAUDE.md section 3): it is a tag, not a style.
+        ///
+        /// Only the status HUD's MENU chip carries it. The top-right corner is where
+        /// every phone puts the way out, a deliberate stretch is the point of a
+        /// two-tap QUIT, and Android Back reaches it from the bottom anyway.
+        /// </summary>
+        public const string REACH_EXEMPT_CLASS = "po-reach-exempt";
+
         /// <summary>Pins an element to all four edges of its parent.</summary>
         public static void FillParent(VisualElement element)
         {

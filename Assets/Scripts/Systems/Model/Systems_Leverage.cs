@@ -76,7 +76,7 @@ namespace PoFootball.Models
                 return 1f;
             }
 
-            if (game.Quarter < Systems_GameRules.QUARTER_COUNT)
+            if (game.Quarter < game.Length.Periods)
             {
                 return 0f;
             }
@@ -88,7 +88,7 @@ namespace PoFootball.Models
                 return 0f;
             }
 
-            float window = Systems_GameRules.QUARTER_SECONDS * LATE_FRACTION;
+            float window = game.Length.PeriodSeconds * LATE_FRACTION;
 
             return Mathf.Clamp01(1f - (game.SecondsRemaining / window));
         }

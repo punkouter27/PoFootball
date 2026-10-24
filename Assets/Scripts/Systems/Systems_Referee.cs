@@ -94,6 +94,8 @@ namespace PoFootball.Systems
         /// <summary>The slot that flinches on this snap, or -1. Drawn once per snap.</summary>
         private int _flinchSlot = -1;
 
+        private readonly Systems_ISnapGate _snapGate;
+
         public Systems_Referee(
             Systems_PlayModel play,
             Systems_BallModel ball,
@@ -106,8 +108,10 @@ namespace PoFootball.Systems
             Systems_IDisciplineModel discipline,
             IPublisher<Systems_PlayEndedMessage> endedPublisher,
             IPublisher<Systems_TackleMessage> tacklePublisher,
-            IPublisher<Systems_ScoreMessage> scorePublisher)
+            IPublisher<Systems_ScoreMessage> scorePublisher,
+            Systems_ISnapGate snapGate)
         {
+            _snapGate = snapGate;
             _play = play;
             _ball = ball;
             _ballSystem = ballSystem;
@@ -177,7 +181,7 @@ namespace PoFootball.Systems
             {
                 // In the air or on the ground. The ball system owns every way that
                 // ends; only the trainer's ceiling is left to apply here.
-                if (_play.PhysicsTick >= Systems_PlayModel.MAX_PHYSICS_TICKS)
+                if (_play.PhysicsTick >= _play.TickCeiling)
                 {
                     EndMapped(Systems_PlayOutcome.TimeExpired, _ball.Position, _ball.PossessingSide);
                 }
@@ -198,9 +202,19 @@ namespace PoFootball.Systems
         /// </summary>
         private void TickPreSnap()
         {
+            // Held before the count starts, not after it: see Systems_ISnapGate.
+            if (!_snapGate.IsOpen)
+            {
+                return;
+            }
+
             _play.AdvancePreSnap();
 
-            if (_play.PreSnapTick == 1 && _play.Kind != Systems_PlayKind.Kickoff)
+            // NOBODY JUMPS ON THE HUMAN'S SNAP. A flinch is drawn, not chosen, so in
+            // the QB challenge it was a five-yard penalty for something the player
+            // did not do — once in fifteen snaps in a played game.
+            if (_play.PreSnapTick == 1 && _play.Kind != Systems_PlayKind.Kickoff
+                && !_snapGate.IsHumanSnap)
             {
                 _flinchSlot = _discipline.DrawFlinch();
             }
@@ -230,7 +244,10 @@ namespace PoFootball.Systems
                 return;
             }
 
-            if (_play.Kind != Systems_PlayKind.Kickoff && _discipline.IsDelayOfGame())
+            // Nor a delay of game: he took his time picking a play, and the clock
+            // does not run before the snap anyway.
+            if (_play.Kind != Systems_PlayKind.Kickoff && !_snapGate.IsHumanSnap
+                && _discipline.IsDelayOfGame())
             {
                 KillBeforeTheSnap(new Systems_Foul(
                     Systems_FoulType.DelayOfGame, Systems_TeamSide.Offense,
@@ -443,8 +460,9 @@ namespace PoFootball.Systems
             // football: an episode that never terminates hangs a rollout. It stays
             // at 600, because it also bounds the ratio between per-tick reward
             // shaping and the terminal reward, and it is paired with time_horizon in
-            // every trainer config. See Systems_PlayModel.MAX_PHYSICS_TICKS.
-            if (_play.PhysicsTick >= Systems_PlayModel.MAX_PHYSICS_TICKS)
+            // every trainer config. See Systems_PlayModel.MAX_PHYSICS_TICKS — and
+            // TickCeiling, which only the QB challenge's human downs raise.
+            if (_play.PhysicsTick >= _play.TickCeiling)
             {
                 // A BREAKAWAY IS A TOUCHDOWN, NOT A TACKLE. The ceiling is the
                 // same in a played game, and it whistled carriers who were running

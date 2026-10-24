@@ -37,6 +37,29 @@ namespace PoFootball.Systems
         private readonly Systems_PlayModel _play;
         private readonly Systems_PlayerRegistry _registry;
         private readonly Systems_ISkillModel _skill;
+
+        /// <summary>The QB challenge's human, or null; see the second constructor.</summary>
+        private readonly Systems_HumanControlModel _humanControl;
+
+        /// <summary>The ball in the air is the QB challenge human's pass to a spot.</summary>
+        private bool _humanPass;
+
+        /// <summary>
+        /// Above this a pass to a spot is over everybody's head, metres. The
+        /// ball's third axis starts and ends at zero, so it is measured from the
+        /// hands that throw and catch it — chest-high, about 1.4 m — and a man
+        /// reaches about a metre above those. Below it — the last strides of a
+        /// lob, the whole of a flat bullet — anyone near the ball may catch it,
+        /// as for every other pass. At PASS_LOFT_RATIO's arc a 25 m throw is over
+        /// heads for its middle 70%, a 40 m one for all but its last three metres.
+        /// </summary>
+        public const float SPOT_PASS_CATCH_HEIGHT = 1f;
+
+        /// <summary>
+        /// How often a defender holds an interception of the human's pass, against
+        /// INTERCEPTION_HOLD_CHANCE's 0.6 for everyone else. The QB challenge only.
+        /// </summary>
+        public const float QB_CHALLENGE_INTERCEPTION_HOLD_CHANCE = 0.25f;
         private readonly IPublisher<Systems_PassThrownMessage> _thrownPublisher;
         private readonly IPublisher<Systems_PassCaughtMessage> _caughtPublisher;
 
@@ -55,7 +78,26 @@ namespace PoFootball.Systems
             Systems_ISkillModel skill,
             IPublisher<Systems_PassThrownMessage> thrownPublisher,
             IPublisher<Systems_PassCaughtMessage> caughtPublisher)
+            : this(ball, play, registry, skill, thrownPublisher, caughtPublisher, null)
         {
+        }
+
+        /// <summary>
+        /// With the QB challenge's human (Systems_HumanControlModel): a pass he
+        /// throws goes to the receiver he clicked. Null, or disabled, everywhere
+        /// else — and then nothing below changes.
+        /// </summary>
+        [VContainer.Inject]
+        public Systems_BallSystem(
+            Systems_BallModel ball,
+            Systems_PlayModel play,
+            Systems_PlayerRegistry registry,
+            Systems_ISkillModel skill,
+            IPublisher<Systems_PassThrownMessage> thrownPublisher,
+            IPublisher<Systems_PassCaughtMessage> caughtPublisher,
+            Systems_HumanControlModel humanControl)
+        {
+            _humanControl = humanControl;
             _ball = ball;
             _play = play;
             _registry = registry;
@@ -210,6 +252,12 @@ namespace PoFootball.Systems
                 return EndIncompletion();
             }
 
+            // A pass to a spot nobody was under: on the turf where it came down.
+            if (_ball.HasLandingSpot && _ball.FlightTicks >= _ball.LandingTicks)
+            {
+                return EndIncompletion();
+            }
+
             return Systems_BallEvent.None;
         }
 
@@ -298,7 +346,14 @@ namespace PoFootball.Systems
         {
             if (intercepted)
             {
-                return _skill.IsInterceptionHeld();
+                // THE QB CHALLENGE: a defender who gets to the human's pass bats
+                // it down far more often than he holds it. At the trained 0.6 six
+                // of thirteen played throws were picked off, most with two and a
+                // half metres of separation at the release — football's open
+                // receiver, priced as a turnover.
+                return _humanPass
+                    ? _skill.IsInterceptionHeld(QB_CHALLENGE_INTERCEPTION_HOLD_CHANCE)
+                    : _skill.IsInterceptionHeld();
             }
 
             float coverageMetres = Mathf.Sqrt(NearestCoverageSquared());
@@ -385,6 +440,14 @@ namespace PoFootball.Systems
             Systems_IPlayerHandle best = null;
             float bestDistance = Systems_SimConstants.CATCH_RADIUS;
 
+            // THE QB CHALLENGE'S PASS TO A SPOT goes over the heads between the
+            // passer and the spot: nobody reaches it until it comes down, and then
+            // whoever is under it, either side, makes the play.
+            if (_ball.HasLandingSpot && _ball.Height > SPOT_PASS_CATCH_HEIGHT)
+            {
+                return null;
+            }
+
             for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
             {
                 Systems_IPlayerHandle candidate = _registry.Get(slotIndex);
@@ -443,6 +506,15 @@ namespace PoFootball.Systems
         /// </summary>
         public void Throw(Systems_IPlayerHandle thrower, Vector2 aim, float power)
         {
+            _humanPass = false;
+
+            if (_humanControl != null && _humanControl.IsEnabled
+                && _humanControl.TakeIntendedSpot(out Vector2 spot))
+            {
+                ThrowToSpot(thrower, spot);
+                return;
+            }
+
             float speed = ThrowSpeedFor(power);
 
             Systems_IPlayerHandle target = ResolveThrowTarget(
@@ -484,6 +556,50 @@ namespace PoFootball.Systems
 
             _thrownPublisher.Publish(new Systems_PassThrownMessage(
                 thrower.Id, target == null ? -1 : target.Id, speed));
+        }
+
+        /// <summary>
+        /// THE QB CHALLENGE'S DOUBLE TAP: a pass to a spot on the grass rather than
+        /// to a man. The read is entirely the human's — no receiver is resolved, no
+        /// lead is solved, and the aim slack has nothing to blend toward — but the
+        /// arm is still the quarterback's: the throw error turns the line off the
+        /// spot by the same draw every other pass takes.
+        ///
+        /// THE ARC IS SET BY THE DISTANCE. The speed is the one whose ordinary loft
+        /// (PASS_LOFT_RATIO) carries the ball exactly that far, inside the passing
+        /// speed band — a flat bullet short, a high ball deep — and the climb is
+        /// then whatever brings it back to the turf on the spot at that speed.
+        /// Past the longest throw the ball can fly (PASS_SPEED_MAX for
+        /// MAX_FLIGHT_TICKS) it is thrown that far toward the spot.
+        /// </summary>
+        private void ThrowToSpot(Systems_IPlayerHandle thrower, Vector2 spot)
+        {
+            Vector2 toSpot = spot - thrower.Position;
+            float maxMetres = Systems_SimConstants.PASS_SPEED_MAX
+                * Systems_SimConstants.MAX_FLIGHT_TICKS * Time.fixedDeltaTime;
+            float metres = Mathf.Min(toSpot.magnitude, maxMetres);
+            Vector2 direction = toSpot.sqrMagnitude > 1e-4f ? toSpot.normalized : Vector2.up;
+
+            float speed = Mathf.Clamp(
+                Mathf.Sqrt(metres * Systems_SimConstants.PASS_GRAVITY / (2f * Systems_SimConstants.PASS_LOFT_RATIO)),
+                Systems_SimConstants.PASS_SPEED_MIN,
+                Systems_SimConstants.PASS_SPEED_MAX);
+
+            direction = Rotate(direction, _skill.ThrowErrorRadians(metres, thrower.Fatigue));
+
+            float flightSeconds = metres / speed;
+            int landingTicks = Mathf.Max(1, Mathf.RoundToInt(flightSeconds / Time.fixedDeltaTime));
+            float verticalSpeed = Systems_SimConstants.PASS_GRAVITY * flightSeconds * 0.5f;
+            Vector2 landing = thrower.Position + (direction * metres);
+
+            thrower.SetCarrier(false);
+            _ball.ThrowToSpot(
+                thrower.Id, thrower.Position, direction * speed, verticalSpeed, landing, landingTicks);
+            _play.MarkForwardPass();
+            _closestReceiverApproach = float.PositiveInfinity;
+            _humanPass = true;
+
+            _thrownPublisher.Publish(new Systems_PassThrownMessage(thrower.Id, -1, speed));
         }
 
         /// <summary>

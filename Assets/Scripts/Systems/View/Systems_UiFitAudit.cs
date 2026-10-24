@@ -20,6 +20,11 @@ namespace PoFootball.Views
     ///   SCROLLING — a ScrollView whose content is taller than it is. The rule is
     ///   that nothing scrolls; a screen that does has not been fitted.
     ///
+    ///   OUT OF REACH — an enabled button whose centre is in the top REACH_LINE
+    ///   of the screen, where the thumb of the hand holding a phone does not go.
+    ///   Controls belong at the bottom; the few that belong in a corner on
+    ///   purpose carry Systems_UiTheme.REACH_EXEMPT_CLASS.
+    ///
     /// And one reading, not a fault on its own: the smallest text on screen in
     /// points on this display, which is what "legible" means on a phone.
     ///
@@ -40,6 +45,14 @@ namespace PoFootball.Views
         /// <summary>Longest stretch of offending text quoted back.</summary>
         private const int QUOTE_LENGTH = 28;
 
+        /// <summary>
+        /// Fraction of the screen, from the top, a thumb does not reach one-handed.
+        /// Thumb-zone maps put the comfortable arc in the lower half and the
+        /// stretch zone above about 60% of the height on a 6-inch phone; on a
+        /// taller one the line only matters more.
+        /// </summary>
+        public const float REACH_LINE = 0.4f;
+
         /// <summary>Real seconds between rescans of the scene for UI documents.</summary>
         private const float DOCUMENT_RESCAN_SECONDS = 2f;
 
@@ -59,9 +72,22 @@ namespace PoFootball.Views
             public int Scrolling;
             public string ScrollingScreen;
 
+            public int OutOfReach;
+            public string OutOfReachExample;
+
             /// <summary>Smallest visible text in typographic points on this display; 0 when the display reports no DPI.</summary>
             public float SmallestPoints;
             public string SmallestExample;
+        }
+
+        /// <summary>
+        /// Forgets the cached document list, so the next <see cref="Run"/> sees a
+        /// scene that loaded inside the rescan interval. For the aspect sweep, which
+        /// audits within a second of a load; the DEBUG sheet never needs it.
+        /// </summary>
+        public static void Rescan()
+        {
+            _lastScan = float.NegativeInfinity;
         }
 
         public static Result Run()
@@ -70,6 +96,7 @@ namespace PoFootball.Views
             result.CutOffExample = string.Empty;
             result.OverflowExample = string.Empty;
             result.ScrollingScreen = string.Empty;
+            result.OutOfReachExample = string.Empty;
             result.SmallestExample = string.Empty;
 
             if (Time.realtimeSinceStartup - _lastScan > DOCUMENT_RESCAN_SECONDS)
@@ -142,6 +169,11 @@ namespace PoFootball.Views
                 }
             }
 
+            if (element is Button button)
+            {
+                CheckReach(button, screen, ref result);
+            }
+
             if (element is TextElement text && !string.IsNullOrEmpty(text.text))
             {
                 CheckText(text, style, screen, pointsPerUnit, ref result);
@@ -209,6 +241,38 @@ namespace PoFootball.Views
                     result.SmallestExample = Quote(text.text);
                 }
             }
+        }
+
+        private static void CheckReach(Button button, Rect screen, ref Result result)
+        {
+            if (!button.enabledInHierarchy || button.pickingMode == PickingMode.Ignore)
+            {
+                return;
+            }
+
+            Rect bounds = button.worldBound;
+
+            if (bounds.width <= 0f || bounds.height <= 0f || !bounds.Overlaps(screen)
+                || bounds.center.y > screen.yMin + (screen.height * REACH_LINE))
+            {
+                return;
+            }
+
+            for (VisualElement scan = button; scan != null; scan = scan.hierarchy.parent)
+            {
+                if (scan.ClassListContains(Systems_UiTheme.REACH_EXEMPT_CLASS))
+                {
+                    return;
+                }
+            }
+
+            if (result.OutOfReach == 0)
+            {
+                result.OutOfReachExample = Quote(
+                    string.IsNullOrEmpty(button.text) ? button.name : button.text);
+            }
+
+            result.OutOfReach++;
         }
 
         private static string Quote(string text)

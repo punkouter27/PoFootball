@@ -22,6 +22,13 @@ namespace PoFootball.Views
     /// true plane position, so the gap between the two is what sells "the ball went
     /// over him". Without the shadow a lifted sprite just reads as a ball that
     /// drifted north, because a top-down view has no other depth cue.
+    ///
+    /// AND THE BALL COMES TOWARD THE CAMERA (2026-10-23). A full-speed pass peaks
+    /// at about 3.3 m (PASS_LOFT_RATIO), so the lift alone was two metres of
+    /// screen against a fifty-metre field and nobody could tell a lob from a
+    /// bullet. Two more cues now ride on it: the ball grows as it climbs, as a
+    /// nearer object does, and a faint tether runs from the shadow up to it, so
+    /// the height reads as a length on the screen rather than an offset.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class Systems_BallView : MonoBehaviour, Systems_IInjectableView
@@ -68,6 +75,33 @@ namespace PoFootball.Views
         /// <summary>Height in metres at which the shadow reaches its smallest.</summary>
         [SerializeField] private float _shadowFadeHeight = 4f;
 
+        /// <summary>How much bigger the ball is drawn per metre of height.</summary>
+        private const float SCALE_PER_METRE = 0.35f;
+
+        /// <summary>The largest it is drawn: a punt at its peak, not a beach ball.</summary>
+        private const float MAX_HEIGHT_SCALE = 2.2f;
+
+        /// <summary>Below this the tether is not drawn — a ball at the hip is not "in the air".</summary>
+        private const float TETHER_MIN_HEIGHT = 0.15f;
+
+        /// <summary>Width of the tether, in world units.</summary>
+        private const float TETHER_WIDTH = 0.14f;
+
+        /// <summary>
+        /// Screen lift per metre for a PASS: an honest 1:1 now that the shadow and
+        /// the tether join the ball to the spot it is over. A pass peaks at about
+        /// 3.3 m, and at _heightToScreen's 0.6 the whole climb was two metres of
+        /// screen. A kick keeps _heightToScreen: it goes twenty metres up.
+        /// </summary>
+        private const float PASS_HEIGHT_TO_SCREEN = 1f;
+
+        /// <summary>Between the players (1, 2) and the trail (4): over a defender it passes above.</summary>
+        private const int TETHER_SORTING_ORDER = 3;
+
+        private Vector3 _baseScale;
+        private Transform _tetherTransform;
+        private SpriteRenderer _tetherRenderer;
+
         private Systems_BallModel _ball;
         private Transform _transform;
         private SpriteRenderer _renderer;
@@ -89,6 +123,37 @@ namespace PoFootball.Views
 
             ApplyBallSkin();
             BuildShadow();
+            BuildTether();
+            _baseScale = _transform.localScale;
+        }
+
+        /// <summary>
+        /// A one-unit white sprite stretched between the shadow and the ball. Built
+        /// from code and parented beside the ball for the same reasons as the shadow.
+        /// </summary>
+        private void BuildTether()
+        {
+            if (_renderer == null)
+            {
+                return;
+            }
+
+            Texture2D white = Texture2D.whiteTexture;
+            Sprite sprite = Sprite.Create(
+                white, new Rect(0f, 0f, white.width, white.height), new Vector2(0.5f, 0.5f), white.width);
+            sprite.name = "PoFootball_BallTether";
+            sprite.hideFlags = HideFlags.HideAndDontSave;
+
+            GameObject tether = new GameObject("BallTether");
+            _tetherTransform = tether.transform;
+            _tetherTransform.SetParent(_transform.parent, false);
+
+            _tetherRenderer = tether.AddComponent<SpriteRenderer>();
+            _tetherRenderer.sprite = sprite;
+            _tetherRenderer.sortingLayerID = _renderer.sortingLayerID;
+            _tetherRenderer.sortingOrder = TETHER_SORTING_ORDER;
+            _tetherRenderer.color = new Color(1f, 1f, 1f, 0.6f);
+            _tetherRenderer.enabled = false;
         }
 
         /// <summary>
@@ -260,7 +325,7 @@ namespace PoFootball.Views
             float height = _ball.Height;
 
             _transform.position = new Vector3(
-                position.x, position.y + (height * _heightToScreen), _zOffset);
+                position.x, position.y + (height * HeightToScreen()), _zOffset);
 
             // ALWAYS DRAWN, INCLUDING WHEN HELD. This used to hide the sprite
             // unless the ball was in flight, on the grounds that the white carrier
@@ -279,6 +344,39 @@ namespace PoFootball.Views
             }
 
             UpdateShadow(position, height, inFlight);
+            UpdateHeightCues(position, height, inFlight);
+        }
+
+        private float HeightToScreen()
+        {
+            return _ball.IsKicked ? _heightToScreen : PASS_HEIGHT_TO_SCREEN;
+        }
+
+        /// <summary>The ball's size and the tether, both from the height alone.</summary>
+        private void UpdateHeightCues(Vector2 position, float height, bool inFlight)
+        {
+            float lift = inFlight ? Mathf.Max(0f, height) : 0f;
+
+            _transform.localScale = _baseScale
+                * Mathf.Min(MAX_HEIGHT_SCALE, 1f + (lift * SCALE_PER_METRE));
+
+            if (_tetherRenderer == null)
+            {
+                return;
+            }
+
+            bool showTether = lift > TETHER_MIN_HEIGHT;
+            _tetherRenderer.enabled = showTether;
+
+            if (!showTether)
+            {
+                return;
+            }
+
+            float length = lift * HeightToScreen();
+            _tetherTransform.position = new Vector3(
+                position.x, position.y + (length * 0.5f), _zOffset + 0.25f);
+            _tetherTransform.localScale = new Vector3(TETHER_WIDTH, length, 1f);
         }
 
         /// <summary>
@@ -308,6 +406,10 @@ namespace PoFootball.Views
 
             _shadowTransform.localScale =
                 _shadowBaseScale * Mathf.Lerp(1f, _shadowMinScale, climb);
+
+            // Sharp and dark near the turf, faint at the top: a second reading of
+            // the same height for a viewer who is watching the shadow, not the ball.
+            _shadowRenderer.color = new Color(0f, 0f, 0f, Mathf.Lerp(0.5f, 0.18f, climb));
         }
 
         private void OnDestroy()
@@ -317,6 +419,11 @@ namespace PoFootball.Views
             if (_shadowTransform != null)
             {
                 Destroy(_shadowTransform.gameObject);
+            }
+
+            if (_tetherTransform != null)
+            {
+                Destroy(_tetherTransform.gameObject);
             }
         }
     }

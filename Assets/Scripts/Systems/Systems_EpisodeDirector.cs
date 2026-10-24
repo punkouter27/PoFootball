@@ -165,6 +165,7 @@ namespace PoFootball.Systems
             // kick was is moot, because the kick formation has replaced it.
             if (_play.Phase == Systems_PlayPhase.PreSnap)
             {
+                ApplyDesignedOffense();
                 ApplyCalledDefense();
                 return;
             }
@@ -362,6 +363,43 @@ namespace PoFootball.Systems
                 _registry.Get(slotIndex).ResetTo(ClampToField(
                     new Vector2(slot.OffsetX, _play.LineOfScrimmageY + slot.OffsetY)));
             }
+        }
+
+        /// <summary>
+        /// Lines the offense up in the formation of the play a human quarterback
+        /// picked (Systems_QbChallengeSystem). As often as he changes his mind
+        /// before the snap; never on a kick, which re-forms through
+        /// KickFormationPending, and only the offense's eleven move.
+        /// </summary>
+        private void ApplyDesignedOffense()
+        {
+            if (!_play.DesignFormationPending)
+            {
+                return;
+            }
+
+            _play.ClearDesignFormationRequest();
+
+            if (_play.Design.IsNone || _play.Design.IsKick || _play.Kind.IsKick())
+            {
+                return;
+            }
+
+            _formations.CallOffense(_play.Design.Formation);
+
+            for (int slotIndex = 0; slotIndex < Systems_FormationBook.SLOTS_PER_SIDE; slotIndex++)
+            {
+                Systems_FormationSlot slot = _formations.GetSlot(slotIndex);
+                Systems_IPlayerHandle player = _registry.Get(slotIndex);
+
+                player.ResetTo(ClampToField(
+                    new Vector2(slot.OffsetX, _play.LineOfScrimmageY + slot.OffsetY)));
+            }
+
+            // The quarterback still has the ball; the snap is from wherever he now stands.
+            Systems_IPlayerHandle quarterback =
+                _registry.Get(Systems_Formation.QUARTERBACK_SLOT_INDEX);
+            _ball.ResetForSnap(Systems_Formation.QUARTERBACK_SLOT_INDEX, quarterback.Position);
         }
 
         public void Dispose()

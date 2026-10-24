@@ -134,9 +134,36 @@ namespace PoFootball.Views
             if (gameScope != null && gameScope.Container != null)
             {
                 gameScope.Container.Inject(statusHud);
+
+                // The DEBUG sheet's PHYSICS view: a debug build's instrument, so
+                // a retail build never constructs it, and a game scene's only —
+                // the menu has no bodies to outline.
+                if (Debug.isDebugBuild)
+                {
+                    Systems_PhysicsDebugView physics = host.AddComponent<Systems_PhysicsDebugView>();
+                    gameScope.Container.Inject(physics);
+                    statusHud.BindPhysicsDebug(physics);
+                }
             }
 
+            // Android Back is offered to every screen in the scene before the HUD's
+            // own way out. Collected once, here, from the same roots — the screens
+            // are scene objects and are all present by sceneLoaded.
+            statusHud.BindScreens(CollectScreens(roots));
+
             host.AddComponent<Systems_InputView>().Bind(statusHud);
+        }
+
+        private static Systems_ScreenView[] CollectScreens(GameObject[] roots)
+        {
+            var screens = new System.Collections.Generic.List<Systems_ScreenView>();
+
+            for (int index = 0; index < roots.Length; index++)
+            {
+                screens.AddRange(roots[index].GetComponentsInChildren<Systems_ScreenView>(true));
+            }
+
+            return screens.ToArray();
         }
     }
 }

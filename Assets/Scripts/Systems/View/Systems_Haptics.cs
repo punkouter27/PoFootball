@@ -38,7 +38,11 @@ namespace PoFootball.Views
         private IntPtr _createOneShotMethod;
 #endif
         private bool _failed;
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        // Android only, for the reason Systems_SpeechOutput._started gives.
         private bool _initialised;
+#endif
 
         /// <param name="strength">0..1: how hard the hit was.</param>
         public void Pulse(float strength)
@@ -85,7 +89,6 @@ namespace PoFootball.Views
             }
 #else
             // Desktop and the Editor have nothing to buzz.
-            _initialised = true;
 #endif
         }
 

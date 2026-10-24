@@ -41,13 +41,16 @@ namespace PoFootball.Views
         /// if its contents ever grow past it — that is the day the ribbon goes
         /// behind the scoreboard again.
         ///
-        /// 147, NOT THE 146 IT WAS MEASURED AT. The first capture read the row's end
-        /// at 222; the warning above fired on its first run, reporting 147, so the
-        /// ribbon had been sitting one unit over the scoreboard's bottom edge since
-        /// it was added. The unit came out of <see cref="RIBBON_GAP"/>, so the
-        /// banner band is exactly where it was.
+        /// 118, WAS 147 (2026-10-22). The team blocks used to stack tag, score and
+        /// timeouts three deep; laid on their side (Systems_HudView.TEAM_BLOCK_WIDTH)
+        /// the row is as tall as the quarter-over-clock group and no taller, and
+        /// every slot below — ribbon, banner band, hit meter — moved up 29 units
+        /// with it. Measured, not estimated: with the slot set short, the warning
+        /// above reported the row's own height as 118. (The 147 it replaced had the
+        /// same history: the first estimate, 146, put the ribbon a unit under the
+        /// scoreboard until the warning said so.)
         /// </summary>
-        public const int SCORE_ROW_HEIGHT = 147;
+        public const int SCORE_ROW_HEIGHT = 118;
 
         public const int RIBBON_TOP = SCORE_ROW_TOP + SCORE_ROW_HEIGHT;
 

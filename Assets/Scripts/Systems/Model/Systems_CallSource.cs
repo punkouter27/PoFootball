@@ -17,6 +17,9 @@ namespace PoFootball.Models
         Policy = 2,
 
         /// <summary>A trained brain whose chances could not be read; only its choice is known.</summary>
-        PolicyChoiceOnly = 3
+        PolicyChoiceOnly = 3,
+
+        /// <summary>The QB challenge's human called it: there are no odds to show.</summary>
+        Human = 4
     }
 }

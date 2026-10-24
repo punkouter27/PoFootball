@@ -22,6 +22,21 @@ namespace PoFootball.Models
     /// </summary>
     public sealed class Systems_GameModel
     {
+        /// <summary>The standard game: four quarters and overtime.</summary>
+        public Systems_GameModel()
+            : this(Systems_GameLength.Standard)
+        {
+        }
+
+        public Systems_GameModel(Systems_GameLength length)
+        {
+            Length = length;
+            SecondsRemaining = length.PeriodSeconds;
+        }
+
+        /// <summary>Periods, their length and overtime; fixed for the game's life.</summary>
+        public Systems_GameLength Length { get; }
+
         public Systems_GamePhase Phase { get; private set; } = Systems_GamePhase.PreGame;
 
         public int HomeScore { get; private set; }
@@ -31,7 +46,7 @@ namespace PoFootball.Models
         /// <summary>1-based. Reads 4 during the fourth quarter, never 5.</summary>
         public int Quarter { get; private set; } = 1;
 
-        public float SecondsRemaining { get; private set; } = Systems_GameRules.QUARTER_SECONDS;
+        public float SecondsRemaining { get; private set; }
 
         public Systems_TeamId Possession { get; private set; } = Systems_TeamId.Home;
 
@@ -91,7 +106,7 @@ namespace PoFootball.Models
             HomeScore = 0;
             AwayScore = 0;
             Quarter = 1;
-            SecondsRemaining = Systems_GameRules.QUARTER_SECONDS;
+            SecondsRemaining = Length.PeriodSeconds;
             Possession = receivingTeam;
             OpeningPossession = receivingTeam;
             PlaysRun = 0;
@@ -242,8 +257,8 @@ namespace PoFootball.Models
 
         public void BeginQuarter(int quarter)
         {
-            Quarter = Mathf.Clamp(quarter, 1, Systems_GameRules.QUARTER_COUNT);
-            SecondsRemaining = Systems_GameRules.QUARTER_SECONDS;
+            Quarter = Mathf.Clamp(quarter, 1, Length.Periods);
+            SecondsRemaining = Length.PeriodSeconds;
         }
 
         /// <summary>

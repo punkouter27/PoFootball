@@ -73,6 +73,9 @@ namespace PoFootball.Views
         /// <summary>A resolved play is waiting for its sentence; see the summary.</summary>
         private bool _linePending;
 
+        /// <summary>Set at the final whistle. No play is being called after it.</summary>
+        private bool _gameOver;
+
         private bool _ribbonShown = true;
 
         [Inject]
@@ -218,7 +221,15 @@ namespace PoFootball.Views
                 _ribbon.Refresh(_weather);
             }
 
-            _callSheetCard.Refresh(_callSheet, _play, now);
+            if (_gameOver)
+            {
+                _callSheetCard.Hide();
+            }
+            else
+            {
+                _callSheetCard.Refresh(_callSheet, _play, now);
+            }
+
             _hitMeter.Refresh(now);
             _ticker.Refresh(_spectator != null && _spectator.HasFocus);
         }
@@ -333,6 +344,7 @@ namespace PoFootball.Views
 
         private void OnGameOver(Systems_GameOverMessage message)
         {
+            _gameOver = true;
             _facts.Resolved = true;
             _facts.Result = Systems_DownResult.EndOfGame;
             _facts.HomeScore = message.HomeScore;

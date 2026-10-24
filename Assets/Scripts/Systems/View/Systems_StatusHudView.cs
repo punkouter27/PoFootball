@@ -86,6 +86,13 @@ namespace PoFootball.Views
         /// </summary>
         private const string MENU_CONFIRM_LABEL = "QUIT?";
 
+        /// <summary>
+        /// The MENU chip's label while Android Back on the menu is armed to close
+        /// the app. The same chip and the same two-press confirm as QUIT? in a
+        /// game, so leaving the app works the way leaving a game does.
+        /// </summary>
+        private const string EXIT_CONFIRM_LABEL = "EXIT?";
+
         /// <summary>How long an armed MENU waits for the second tap, in real milliseconds.</summary>
         private const long MENU_CONFIRM_MS = 3000;
 
@@ -176,7 +183,18 @@ namespace PoFootball.Views
 
         private Button _menuChip;
         private bool _menuArmed;
+        private bool _exitArmed;
         private IVisualElementScheduledItem _menuDisarm;
+
+        /// <summary>
+        /// Every other screen in this scene, topmost panel first: the order Android
+        /// Back is offered in. Handed over by Systems_StatusHudBootstrap.
+        /// </summary>
+        private Systems_ScreenView[] _screens = new Systems_ScreenView[0];
+
+        /// <summary>The DEBUG sheet's field overlay, in a game scene of a debug build; null otherwise.</summary>
+        private Systems_PhysicsDebugView _physicsView;
+        private Button _physicsChip;
 
         private int _errorCount;
         private int _warningCount;
@@ -375,8 +393,13 @@ namespace PoFootball.Views
 
             // TOP-RIGHT. Inert on the menu itself, where it has nowhere to go, and
             // shown as such rather than as a button that does nothing.
+            //
+            // The one control allowed up here (Systems_UiTheme.REACH_EXEMPT_CLASS):
+            // a way out in the corner every phone puts it, behind a two-tap
+            // confirm, and reachable from the bottom through Android Back.
             _menuChip = BuildChip(MENU_LABEL, OnMenuPressed);
-            _menuChip.SetEnabled(!Systems_StatusHudBootstrap.IsMenuScene(gameObject.scene));
+            _menuChip.SetEnabled(!IsOnMenu);
+            _menuChip.AddToClassList(Systems_UiTheme.REACH_EXEMPT_CLASS);
             bar.Add(_menuChip);
 
             // TOP-CENTRE, AND ABSOLUTE RATHER THAN A THIRD FLEX CHILD. A child
@@ -460,10 +483,16 @@ namespace PoFootball.Views
         private VisualElement BuildDebugSheet()
         {
             VisualElement sheet = Systems_UiTheme.Column();
+            sheet.name = "DebugSheet";
             sheet.style.position = Position.Absolute;
             sheet.style.left = Systems_UiTheme.SPACE_M;
             sheet.style.right = Systems_UiTheme.SPACE_M;
-            sheet.style.bottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT + Systems_UiTheme.SPACE_S;
+            // In a game, above the transport rather than over it. The sheet was
+            // docked on the footer and covered PAUSE and the speed chip, so a
+            // stutter the sheet had just named could not be paused to look at.
+            sheet.style.bottom = IsOnMenu
+                ? Systems_UiTheme.STATUS_FOOTER_HEIGHT + Systems_UiTheme.SPACE_S
+                : Systems_HudLayout.CARD_DOCK_BOTTOM;
 
             // Capped, not sized. A device that finds six problems must not push the
             // sheet up behind the scoreboard; one that finds none must not leave a
@@ -474,9 +503,27 @@ namespace PoFootball.Views
             Systems_UiTheme.SetRadius(sheet, Systems_UiTheme.RADIUS);
             Systems_UiTheme.ApplyElevation(sheet);
 
+            // The heading shares its row with the PHYSICS switch, so the switch
+            // costs the sheet no height.
+            VisualElement headingRow = Systems_UiTheme.Row();
+            headingRow.style.justifyContent = Justify.SpaceBetween;
+            headingRow.style.alignItems = Align.Center;
+            headingRow.style.marginBottom = Systems_UiTheme.SPACE_S;
+
             Label heading = Systems_UiTheme.Caption("WHAT NEEDS ATTENTION");
-            heading.style.marginBottom = Systems_UiTheme.SPACE_S;
-            sheet.Add(heading);
+            headingRow.Add(heading);
+
+            // Only where there is a field to draw on: Systems_StatusHudBootstrap
+            // binds the overlay in a game scene and nowhere else.
+            if (_physicsView != null)
+            {
+                _physicsChip = BuildChip(string.Empty, OnPhysicsPressed);
+                _physicsChip.name = "PhysicsToggle";
+                headingRow.Add(_physicsChip);
+                ApplyPhysicsChip();
+            }
+
+            sheet.Add(headingRow);
 
             _sheetFindings = Systems_UiTheme.Text(
                 string.Empty, Systems_UiTheme.TEXT_CAPTION,
@@ -506,13 +553,82 @@ namespace PoFootball.Views
 
         // --- Input -------------------------------------------------------------
 
+        private bool IsOnMenu => Systems_StatusHudBootstrap.IsMenuScene(gameObject.scene);
+
+        /// <summary>The other screens in this scene, for Android Back. Sorted here, topmost panel first.</summary>
+        internal void BindScreens(Systems_ScreenView[] screens)
+        {
+            _screens = screens ?? new Systems_ScreenView[0];
+            Array.Sort(_screens, (left, right) => right.SortingOrder.CompareTo(left.SortingOrder));
+        }
+
+        internal void BindPhysicsDebug(Systems_PhysicsDebugView view)
+        {
+            _physicsView = view;
+        }
+
+        /// <summary>
+        /// Android Back — Systems_InputView sends it here from the Escape key,
+        /// which is what the Input System reports the system back button as.
+        ///
+        /// ONE ROUTE, TOPMOST FIRST. This sheet if it is open; then each screen in
+        /// panel order, which closes the sheet or reel it has up; and when nothing
+        /// is open, the way out the MENU chip already offers — two presses to
+        /// abandon a game in progress, one to leave a finished one, and on the
+        /// menu two presses to close the app. Back never does anything a visible
+        /// control on the screen does not also do.
+        /// </summary>
+        internal void RouteBack()
+        {
+            if (!IsBuilt)
+            {
+                return;
+            }
+
+            if (_sheetOpen)
+            {
+                OnDebugPressed();
+                return;
+            }
+
+            for (int index = 0; index < _screens.Length; index++)
+            {
+                Systems_ScreenView screen = _screens[index];
+
+                if (screen != null && screen.isActiveAndEnabled && screen.HandleBack())
+                {
+                    return;
+                }
+            }
+
+            if (IsOnMenu)
+            {
+                if (_exitArmed)
+                {
+                    Application.Quit();
+                    return;
+                }
+
+                ArmExit();
+                return;
+            }
+
+            OnMenuPressed();
+        }
+
         private void OnMenuPressed()
         {
             // Already there. Reloading the menu on top of itself would throw the
             // LAST GAME card away, which is the one piece of state this screen
-            // carries between scenes.
-            if (Systems_StatusHudBootstrap.IsMenuScene(gameObject.scene))
+            // carries between scenes. The chip is only live here while Back has
+            // armed it to close the app.
+            if (IsOnMenu)
             {
+                if (_exitArmed)
+                {
+                    Application.Quit();
+                }
+
                 return;
             }
 
@@ -542,16 +658,48 @@ namespace PoFootball.Views
             _menuDisarm = _menuChip.schedule.Execute(DisarmMenu).StartingIn(MENU_CONFIRM_MS);
         }
 
+        private void ArmExit()
+        {
+            _exitArmed = true;
+            _menuChip.SetEnabled(true);
+            _menuChip.text = EXIT_CONFIRM_LABEL;
+            _menuChip.style.backgroundColor = Systems_UiTheme.Negative;
+
+            _menuDisarm?.Pause();
+            _menuDisarm = _menuChip.schedule.Execute(DisarmMenu).StartingIn(MENU_CONFIRM_MS);
+        }
+
         private void DisarmMenu()
         {
             _menuArmed = false;
+            _exitArmed = false;
             _menuChip.text = MENU_LABEL;
             _menuChip.style.backgroundColor = Systems_UiTheme.SurfaceRaised;
+            _menuChip.SetEnabled(!IsOnMenu);
+        }
+
+        private void OnPhysicsPressed()
+        {
+            if (_physicsView == null)
+            {
+                return;
+            }
+
+            _physicsView.IsShowing = !_physicsView.IsShowing;
+            ApplyPhysicsChip();
+        }
+
+        private void ApplyPhysicsChip()
+        {
+            bool on = _physicsView != null && _physicsView.IsShowing;
+            _physicsChip.text = on ? "PHYSICS ON" : "PHYSICS OFF";
+            _physicsChip.style.color = on ? Systems_UiTheme.Accent : Systems_UiTheme.TextPrimary;
         }
 
         /// <summary>
-        /// The DEBUG chip, from the keyboard — Systems_InputView calls this on TAB.
-        /// Does nothing in a build that has no chip to press.
+        /// The DEBUG chip, from the keyboard or a gesture — Systems_InputView calls
+        /// this on TAB and on a three-finger tap. Does nothing in a build that has
+        /// no chip to press.
         /// </summary>
         internal void ToggleDebugSheet()
         {
@@ -1050,6 +1198,16 @@ namespace PoFootball.Views
                     + "the text or let the label wrap.");
             }
 
+            if (_fit.OutOfReach > 0)
+            {
+                Add(ref count, 40,
+                    _fit.OutOfReach + " control" + (_fit.OutOfReach == 1 ? " sits" : "s sit")
+                    + " in the top " + Mathf.RoundToInt(Systems_UiFitAudit.REACH_LINE * 100f)
+                    + "% of the screen, out of a thumb's reach on a phone held in one hand — "
+                    + "first \"" + _fit.OutOfReachExample + "\". Dock it at the bottom, or mark "
+                    + "it Systems_UiTheme.REACH_EXEMPT_CLASS if the corner is the point.");
+            }
+
             if (_fit.SmallestPoints > 0f && _fit.SmallestPoints < SMALLEST_LEGIBLE_POINTS)
             {
                 Add(ref count, 34,
@@ -1442,7 +1600,9 @@ namespace PoFootball.Views
             builder.Append(_fit.Overflowing);
             builder.Append(" overflowing, ");
             builder.Append(_fit.Scrolling);
-            builder.Append(" scrolling   |   smallest ");
+            builder.Append(" scrolling, ");
+            builder.Append(_fit.OutOfReach);
+            builder.Append(" out of reach   |   smallest ");
 
             if (_fit.SmallestPoints > 0f)
             {

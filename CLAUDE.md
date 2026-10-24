@@ -55,7 +55,19 @@ Unity ML-Agents self-play.
   two chips.
 - The DEBUG sheet is written in **English, worst finding first** — what is wrong,
   how bad, what to do — not rows of instrument readings. The readings are under it.
-- The panel scales on width — size against a live capture.
+- The DEBUG sheet opens from its chip, TAB, or a three-finger tap; its PHYSICS
+  switch draws colliders, velocity, facing and fatigue on the field
+  (`Systems_PhysicsDebugView`, debug builds, game scenes only).
+- **Android Back** (the Escape key) closes the topmost sheet or reel, then takes
+  the MENU chip's way out: two presses to abandon a live game, one to leave a
+  finished one, two to close the app from the menu. One route,
+  `Systems_StatusHudView.RouteBack`; a screen opts in with `HandleBack`.
+- No control in the top 40% of the screen but the MENU chip
+  (`Systems_UiTheme.REACH_EXEMPT_CLASS`). `Systems_AspectSweepTests` holds that,
+  and no cut-off, overflowing or scrolling text, on five ratios from 16:9 to 21:9.
+- The result screen is one sheet with three tabs — BOX SCORE, SCORING, HIGHLIGHTS.
+- The panel scales on width — size against a live capture
+  (*Tools → PoFootball → UI → Capture Screens (5 ratios)*).
 
 ## 4. MLOps
 - C# and Python `mlagents` versions must match; comms API version **equal** or the
@@ -454,6 +466,45 @@ Note that `m_Model` references serialized in the scenes are dead either way:
 Heuristic-only is a supported, playable state, not a bug — but nothing you watch
 right now is a trained policy. **To change that, train and promote `football_base23`**
 — see above.
+
+**QB CHALLENGE (2026-10-23)** — the one-player mode, from the menu's QB CHALLENGE
+button. The human is the home quarterback for one 180 s period
+(`Systems_GameLength.QbChallenge`: no halftime, no overtime, football's clock rules for
+both sides) and scores as many points as he can; the computer plays his ten team-mates,
+the whole defense, every kick and every snap his team is not on offense for. Before each
+of his downs `Systems_QbChallengeSystem` deals 9 of the 20 plays in `Systems_Playbook`
+(plus PUNT, and FIELD GOAL in range, on 4th down) and holds the snap
+(`Systems_ISnapGate`, shut before the pre-snap count starts, so the kick window still
+works) until he picks one and taps the field. A play is a formation, a job per eligible
+slot (`Systems_Route`, geometry in `Systems_RouteBook`) and a designed call — but the real
+call latches only when he acts, so any play can be thrown or handed off.
+**Controls are tap to run, double-tap to pass, identical for touch and mouse**
+(`Systems_HumanControlModel.Tap`, 0.35 s / 3 m window, on unscaled time): a tap on the
+field is where the ball carrier sprints to, stopping on the spot (so a runner who stops
+in space is ruled down, as the stall rule says); a tap ON a team-mate (within 1.2 m:
+at 2 m a drop-back tap behind the quarterback pitched to the fullback standing there)
+beside or behind him is a handoff (a back within reach) or a pitch; a tap in the
+pre-snap count after the hike is where he drops to; a carrier nobody has tapped for
+keeps the run he took the ball on. A double tap is a PASS TO THAT SPOT
+(`Systems_BallSystem.ThrowToSpot`), not to a man: speed from the distance at the normal
+loft, the climb that lands it exactly there, the usual throw error, nobody can catch it
+above `SPOT_PASS_CATCH_HEIGHT` (the ball's height is real for this pass only), it falls
+incomplete where it lands, and team-mates in reach break for the landing spot, defenders
+after a 0.3 s read (breaking at the release, they met every catch: 4.5, 0.3, 0.0 and -2.7
+yards). The hike's tap never pairs into a double. Hovering the mouse only draws the ring;
+it steers nobody. Training and the CPU game are unchanged. The best score is kept in
+PlayerPrefs. The variant crosses the
+scene load like the seed (`Systems_GameVariantRequest`). Scripted routes exist only for
+designed plays, so the CPU-only game still runs its old receiver fan.
+Tuned from played games (2026-10-23; the scripted human went 0-10, 0-16, then 21-0
+after): a defender holds an interception of the human's pass 25% of the time, not 60%
+(`QB_CHALLENGE_INTERCEPTION_HOLD_CHANCE`: 6 of 13 throws were picked off before, 0 of
+14 after); his downs run to 1500 ticks, not 600 (`Systems_PlayModel.TickCeiling`); no
+drawn flinch or delay of game on his snap (`Systems_ISnapGate.IsHumanSnap`); a ring
+marks the team-mate a tap would hand or pitch to and a dot the spot the carrier is
+running to or the pass is coming down on; the call sheet says YOU instead of the
+script's odds. For every game, a pass in the air is drawn bigger as it
+climbs, lifted 1:1 and tethered to its shadow (`Systems_BallView`; presentation only).
 
 **Scenes.** `SCN_MENU` (front end) → `SCN_GAME` (a scored game) and
 `SCN_TRAIN_FOOTBALL` (the trainer's endless single plays). All three share one

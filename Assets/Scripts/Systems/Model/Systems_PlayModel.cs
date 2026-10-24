@@ -227,6 +227,55 @@ namespace PoFootball.Models
         /// </summary>
         public bool RunsOnly { get; private set; }
 
+        /// <summary>
+        /// The play a human quarterback picked for this snap (Systems_QbChallengeSystem),
+        /// or the default value — no design — for every scripted and trained snap.
+        /// What the ten players around him do comes from here until the real call
+        /// latches; the call itself is still latched only when he acts.
+        /// </summary>
+        public Systems_PlayDesign Design { get; private set; }
+
+        /// <summary>A design was picked and the offense has not re-formed for it yet.</summary>
+        public bool DesignFormationPending { get; private set; }
+
+        /// <summary>
+        /// The tick a play is whistled dead at whatever is happening: MAX_PHYSICS_TICKS,
+        /// which every trainer config is paired with, except on a human's down in
+        /// the QB challenge, where a person weaving through tacklers needs longer
+        /// than twelve seconds (Systems_QbChallengeSystem). Reset every episode.
+        /// </summary>
+        public int TickCeiling { get; private set; } = MAX_PHYSICS_TICKS;
+
+        public void SetTickCeiling(int ticks)
+        {
+            TickCeiling = ticks;
+        }
+
+        /// <summary>
+        /// The call the ten other players should play to: the latched one once there
+        /// is one, the design's before that, and None when there is neither.
+        /// </summary>
+        public Systems_PlayCall EffectiveCall =>
+            CallIsLatched ? Call : (Design.IsNone ? Systems_PlayCall.None : Design.Call);
+
+        /// <summary>Before the snap only; the director re-forms the offense for it.</summary>
+        public void SetDesign(Systems_PlayDesign design)
+        {
+            if (Phase != Systems_PlayPhase.PreSnap)
+            {
+                return;
+            }
+
+            Design = design;
+            DesignFormationPending = true;
+        }
+
+        /// <summary>The director has re-formed the offense for the design.</summary>
+        public void ClearDesignFormationRequest()
+        {
+            DesignFormationPending = false;
+        }
+
         /// <summary>Yards needed for a new series from this snap.</summary>
         public float YardsToGo { get; private set; } = Systems_GameRules.YARDS_TO_GAIN;
 
@@ -256,6 +305,9 @@ namespace PoFootball.Models
             Systems_PlayKind kind, bool onsideKick, bool runsOnly)
         {
             RunsOnly = runsOnly;
+            Design = default;
+            DesignFormationPending = false;
+            TickCeiling = MAX_PHYSICS_TICKS;
             Phase = Systems_PlayPhase.PreSnap;
             Outcome = Systems_PlayOutcome.None;
             Call = Systems_PlayCall.None;

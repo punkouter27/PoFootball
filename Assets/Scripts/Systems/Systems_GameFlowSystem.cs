@@ -819,7 +819,7 @@ namespace PoFootball.Systems
         /// </summary>
         private bool ShouldGoForTwo(Systems_TeamId scorer)
         {
-            if (_game.Quarter < Systems_GameRules.QUARTER_COUNT)
+            if (_game.Quarter < _game.Length.Periods)
             {
                 return false;
             }
@@ -843,7 +843,7 @@ namespace PoFootball.Systems
         /// </summary>
         private bool ShouldTryOnside(Systems_TeamId kickingTeam)
         {
-            if (_game.Quarter < Systems_GameRules.QUARTER_COUNT
+            if (_game.Quarter < _game.Length.Periods
                 || _game.Phase == Systems_GamePhase.Overtime)
             {
                 return false;
@@ -1368,7 +1368,7 @@ namespace PoFootball.Systems
 
         private bool IsLateInHalf()
         {
-            if (_game.Quarter == Systems_GameRules.QUARTER_COUNT / 2)
+            if (_game.Quarter == _game.Length.HalftimeAfter)
             {
                 return _game.SecondsRemaining
                     <= Systems_GameRules.OUT_OF_BOUNDS_STOPS_CLOCK_FIRST_HALF_SECONDS;
@@ -1380,7 +1380,7 @@ namespace PoFootball.Systems
                     <= Systems_GameRules.OUT_OF_BOUNDS_STOPS_CLOCK_FIRST_HALF_SECONDS;
             }
 
-            return _game.Quarter >= Systems_GameRules.QUARTER_COUNT
+            return _game.Quarter >= _game.Length.Periods
                 && _game.SecondsRemaining
                     <= Systems_GameRules.OUT_OF_BOUNDS_STOPS_CLOCK_SECOND_HALF_SECONDS;
         }
@@ -1393,8 +1393,8 @@ namespace PoFootball.Systems
                 return false;
             }
 
-            if (_game.Quarter != Systems_GameRules.QUARTER_COUNT / 2
-                && _game.Quarter != Systems_GameRules.QUARTER_COUNT)
+            if (_game.Quarter != _game.Length.HalftimeAfter
+                && _game.Quarter != _game.Length.Periods)
             {
                 return false;
             }
@@ -1445,8 +1445,8 @@ namespace PoFootball.Systems
                 return false;
             }
 
-            bool endOfGame = _game.Quarter >= Systems_GameRules.QUARTER_COUNT;
-            bool endOfHalf = _game.Quarter == Systems_GameRules.QUARTER_COUNT / 2;
+            bool endOfGame = _game.Quarter >= _game.Length.Periods;
+            bool endOfHalf = _game.Quarter == _game.Length.HalftimeAfter;
 
             if (!endOfGame && !endOfHalf)
             {
@@ -1489,13 +1489,13 @@ namespace PoFootball.Systems
                 return false;
             }
 
-            if (_game.Quarter == Systems_GameRules.QUARTER_COUNT / 2)
+            if (_game.Quarter == _game.Length.HalftimeAfter)
             {
                 return _game.SecondsRemaining <= Systems_GameRules.HUDDLE_SECONDS
                     && _game.LineOfScrimmageY < 0f;
             }
 
-            if (_game.Quarter < Systems_GameRules.QUARTER_COUNT
+            if (_game.Quarter < _game.Length.Periods
                 || _game.ScoreOf(team) <= _game.ScoreOf(team.Opponent()))
             {
                 return false;
@@ -1533,12 +1533,12 @@ namespace PoFootball.Systems
                 return false;
             }
 
-            if (_game.Quarter == Systems_GameRules.QUARTER_COUNT / 2)
+            if (_game.Quarter == _game.Length.HalftimeAfter)
             {
                 return true;
             }
 
-            return _game.Quarter >= Systems_GameRules.QUARTER_COUNT
+            return _game.Quarter >= _game.Length.Periods
                 && _game.ScoreOf(team) <= _game.ScoreOf(team.Opponent());
         }
 
@@ -1575,11 +1575,12 @@ namespace PoFootball.Systems
                 return Systems_DownResult.EndOfGame;
             }
 
-            if (_game.Quarter >= Systems_GameRules.QUARTER_COUNT)
+            if (_game.Quarter >= _game.Length.Periods)
             {
                 // LEVEL AFTER FOUR QUARTERS IS NOT THE END. Overtime settles it —
-                // see Systems_GameRules.OVERTIME_SECONDS.
-                if (_game.HomeScore == _game.AwayScore)
+                // see Systems_GameRules.OVERTIME_SECONDS. Unless the length has
+                // none: the QB challenge ends at 0:00 however it stands.
+                if (_game.HomeScore == _game.AwayScore && _game.Length.HasOvertime)
                 {
                     _game.BeginOvertime();
                     _game.ResetTimeouts(Systems_GameRules.TIMEOUTS_IN_OVERTIME);
@@ -1605,7 +1606,7 @@ namespace PoFootball.Systems
             // Halftime resets field position: whoever received the opening kickoff
             // kicks off the second half. Between the first and second, and the third
             // and fourth, only the period changes — the drive carries on.
-            if (nextQuarter == 3)
+            if (_game.Length.HalftimeAfter > 0 && nextQuarter == _game.Length.HalftimeAfter + 1)
             {
                 _game.SetPhase(Systems_GamePhase.Halftime);
                 _game.SetClockRunning(false);

@@ -22,24 +22,29 @@ namespace PoFootball.Views
     /// lit and shadowed — and a board the size of a card was always a compromise
     /// forced by the scrim, not a choice.
     ///
-    /// TWO STATES, AND THE RESULT SCREEN IS HOME. At the final whistle the reel
-    /// shows only a WATCH HIGHLIGHTS button under the final card; the result, the
-    /// box score, REMATCH and MENU are what a viewer sees first. Opening it swaps
-    /// the button for the control card and the field takes the screen. RESULT
-    /// closes it, and so does the last highlight finishing — each highlight plays
-    /// through, holds its whistle frame for <see cref="END_HOLD_SECONDS"/>, and
-    /// hands on to the next. Closing is what brings the final overlay back, so
+    /// TWO STATES, AND THE RESULT SCREEN IS HOME. Closed, the reel draws nothing
+    /// at all: the way in is the HIGHLIGHTS tab on Systems_HudView's final sheet,
+    /// which publishes Systems_OpenHighlightsMessage, and the owner calls
+    /// <see cref="Open"/>. Open, the field takes the screen under the control card.
+    /// RESULT closes it, and so does the last highlight finishing — each highlight
+    /// plays through, holds its whistle frame for <see cref="END_HOLD_SECONDS"/>,
+    /// and hands on to the next. Closing is what brings the final overlay back, so
     /// REMATCH and MENU are always one tap away.
+    ///
+    /// THE CLOSED STATE USED TO BE A WATCH HIGHLIGHTS BUTTON of its own, on this
+    /// document, floating between the result sheet and the status footer — so the
+    /// bottom of the final screen was a stack of three things and the sheet had to
+    /// be lifted a chip and two gaps to clear the middle one. Results, scoring and
+    /// replay are now three tabs of one sheet.
     ///
     /// DOCKED AT THE BOTTOM, AND COMPACT, so the field above it is the picture.
     /// The card is a header, a scrubber and one row of transport, about 230 panel
     /// units — an eighth of a 1080x1920 panel and less of a 20:9 one. It needs no
-    /// knowledge of the final card's height any more: when the card is open the
-    /// final overlay is down, and the closed state is a single 56-unit button,
-    /// which sits about 470 units under MENU on the shortest portrait panel.
+    /// knowledge of the final card's height: when the card is open the final
+    /// overlay is down.
     ///
     /// NOTHING HERE STEALS A TAP. The overlay, its content and the dock are all
-    /// PickingMode.Ignore; only the button and the card are pickable. The
+    /// PickingMode.Ignore; only the card is pickable. The
     /// document sits above Systems_HudView's, so a pickable full-screen container
     /// here would silently kill REMATCH and MENU — the exact failure
     /// Systems_ScreenView's picking note describes.
@@ -77,7 +82,6 @@ namespace PoFootball.Views
         private readonly int _count;
         private readonly Systems_UiOverlay _overlay;
 
-        private VisualElement _openRow;
         private VisualElement _card;
         private Label _indexLabel;
         private Label _detailLabel;
@@ -115,7 +119,10 @@ namespace PoFootball.Views
         /// <summary>Where in <see cref="Current"/> the field should be drawn, in recorded ticks.</summary>
         public float Cursor => _cursor;
 
-        /// <summary>Puts the WATCH HIGHLIGHTS button up. Nothing plays until it is pressed.</summary>
+        /// <summary>How many highlights there are to watch; the final sheet offers its tab only above zero.</summary>
+        public int Count => _count;
+
+        /// <summary>Makes the reel's layer live. It draws nothing until <see cref="Open"/>.</summary>
         public void Show()
         {
             if (_count == 0)
@@ -124,6 +131,21 @@ namespace PoFootball.Views
             }
 
             _overlay.Show();
+        }
+
+        /// <summary>
+        /// The first highlight, on the field, playing. Called by the owner when the
+        /// final sheet's HIGHLIGHTS tab asks; a no-op with nothing to show.
+        /// </summary>
+        public void Open()
+        {
+            if (_count == 0 || IsOpen)
+            {
+                return;
+            }
+
+            SetOpen(true);
+            Select(0);
         }
 
         /// <summary>
@@ -185,26 +207,8 @@ namespace PoFootball.Views
             dock.style.right = Systems_UiTheme.SPACE_M;
             dock.pickingMode = PickingMode.Ignore;
 
-            dock.Add(BuildOpenRow());
             dock.Add(BuildCard());
             return dock;
-        }
-
-        /// <summary>
-        /// The closed state: one button, centred, at chip height. Quieter than the
-        /// final card's REMATCH and MENU on purpose — the result is the headline of
-        /// that screen and this is an extra.
-        /// </summary>
-        private VisualElement BuildOpenRow()
-        {
-            _openRow = Systems_UiTheme.Row();
-            _openRow.style.justifyContent = Justify.Center;
-            _openRow.pickingMode = PickingMode.Ignore;
-
-            Button open = Control("WATCH HIGHLIGHTS", Systems_UiTheme.SurfaceRaised, OnOpenPressed);
-            Systems_UiTheme.ApplyElevation(open);
-            _openRow.Add(open);
-            return _openRow;
         }
 
         private VisualElement BuildCard()
@@ -342,14 +346,13 @@ namespace PoFootball.Views
         // --- Control --------------------------------------------------------------
 
         /// <summary>
-        /// Swaps the button for the card or back. Display rather than the
-        /// overlay's fade: the two never share the screen, and a cross-fade
-        /// between them would put both under the thumb for a fifth of a second.
+        /// Puts the card up or takes it away. Display rather than the overlay's
+        /// fade: the final sheet comes back the moment it closes, and a fade-out
+        /// would leave the card under the sheet's buttons for a fifth of a second.
         /// </summary>
         private void SetOpen(bool open)
         {
             IsOpen = open;
-            _openRow.style.display = open ? DisplayStyle.None : DisplayStyle.Flex;
             _card.style.display = open ? DisplayStyle.Flex : DisplayStyle.None;
 
             if (!open)
@@ -397,17 +400,6 @@ namespace PoFootball.Views
         private static Systems_DownResult CaptionResult(Systems_ReplayHighlight highlight)
         {
             return highlight.PlayResult;
-        }
-
-        private void OnOpenPressed()
-        {
-            if (_count == 0)
-            {
-                return;
-            }
-
-            SetOpen(true);
-            Select(0);
         }
 
         private void OnResultPressed()

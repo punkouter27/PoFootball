@@ -366,6 +366,35 @@ namespace PoFootball.Agents
 
         private Systems_FormationSelection _formations;
 
+        /// <summary>
+        /// The QB challenge's human (Systems_HumanControlModel): asked every
+        /// decision whether he is steering this player. Disabled in every other
+        /// game, and null for an agent with no lifetime scope.
+        /// </summary>
+        private Systems_HumanControlModel _humanControl;
+
+        // --- A designed play's route (Systems_PlayDesign, QB challenge) --------
+        //
+        // Where this player lined up at the snap, and whether he has finished the
+        // first leg of his route. Per play; see Systems_RouteBook.
+        private int _routeEpisode = -1;
+        private Vector2 _routeStart;
+        private bool _routeLegComplete;
+
+        /// <summary>
+        /// How much farther than HANDOFF_RADIUS a back may be when the human clicks
+        /// him for the handoff to count: the designated back then closes the rest,
+        /// as on any handoff (TargetPoint's mesh branch).
+        /// </summary>
+        private const float HUMAN_HANDOFF_REACH_METRES = 1f;
+
+        /// <summary>
+        /// Flight ticks before a scripted defender breaks for where the human's pass
+        /// to a spot comes down (0.3 s, a defensive back's read of the throw).
+        /// Until then he chases its line, as on any other pass.
+        /// </summary>
+        private const int DEFENDER_READ_TICKS = 15;
+
         /// <summary>Null for an agent with no lifetime scope, who is role-average.</summary>
         private Systems_Roster _roster;
 
@@ -405,8 +434,10 @@ namespace PoFootball.Agents
             Systems_Roster roster,
             Systems_SimHealthModel health,
             Systems_PenaltySystem penalties,
-            Systems_ICallSheetSink callSheet)
+            Systems_ICallSheetSink callSheet,
+            Systems_HumanControlModel humanControl)
         {
+            _humanControl = humanControl;
             _callSheet = callSheet;
             _health = health;
             _roster = roster;
@@ -952,6 +983,14 @@ namespace PoFootball.Agents
 
             _callSheetEpisode = _play.EpisodeIndex;
 
+            // The QB challenge: the human picked it, and the script's odds would be
+            // a forecast of a call nobody is making.
+            if (_humanControl != null && _humanControl.HumanOnOffense)
+            {
+                _callSheet.ReportOffense(_play.EpisodeIndex, null, Systems_CallSource.Human);
+                return;
+            }
+
             BehaviorParameters behaviorParameters = GetComponent<BehaviorParameters>();
             bool scripted = behaviorParameters == null
                 || behaviorParameters.Model == null
@@ -1029,8 +1068,11 @@ namespace PoFootball.Agents
             // the policy emits on branch 0 is ignored, exactly as index 0 is.
             // Committing on the first decision step meant choosing off the pre-snap
             // alignment alone; see Systems_SimConstants.DROPBACK_TICKS.
+            // A human quarterback commits the moment he acts — the handoff, the
+            // throw, the pitch, crossing the line — not at the dropback: there is no
+            // dropback to wait for when a person is reading the field.
             if (!_play.CallIsLatched
-                && _play.PhysicsTick >= Systems_SimConstants.DROPBACK_TICKS)
+                && (_play.PhysicsTick >= Systems_SimConstants.DROPBACK_TICKS || IsHumanControlled()))
             {
                 _play.LatchCall((Systems_PlayCall)discrete[0]);
 
@@ -1767,7 +1809,9 @@ namespace PoFootball.Agents
             // quarterback's kick-or-go on fourth down.
             if (_play.Phase == Systems_PlayPhase.PreSnap)
             {
-                if (_hasQuarterbackActions && _play.CanCallKick)
+                // On a human down the kick is a card he picks (Systems_QbChallengeSystem).
+                if (_hasQuarterbackActions && _play.CanCallKick
+                    && (_humanControl == null || !_humanControl.HumanOnOffense))
                 {
                     discreteActions[PLAY_CALL_BRANCH] = (int)ChooseKickCall();
                 }
@@ -1786,9 +1830,20 @@ namespace PoFootball.Agents
             // damping has to ask for it.
             _settleRadius = 0f;
 
+            if (IsHumanControlled())
+            {
+                HumanControl(continuousActions, discreteActions);
+                return;
+            }
+
             Steer(continuousActions, TargetPoint());
 
-            if (_hasQuarterbackActions)
+            // ON A HUMAN DOWN NOBODY CALLS FOR HIM. A quarterback the human is not
+            // steering at this moment — the ball came loose, say — would otherwise
+            // write the script's planned call, and the dropback latch would commit
+            // the human to it.
+            if (_hasQuarterbackActions
+                && (_humanControl == null || !_humanControl.HumanOnOffense))
             {
                 HeuristicQuarterback(continuousActions, discreteActions);
             }
@@ -2007,40 +2062,27 @@ namespace PoFootball.Agents
             // is the whole job — and it is the same thing Reward_Role.Block already
             // measures, so the scripted line and the reward finally want the same
             // thing instead of two different ones.
+            // THE HUMAN'S PASS TO A SPOT (the QB challenge's double tap): it was
+            // thrown at grass, not at a man, so every eligible team-mate in reach of
+            // where it comes down breaks for it, as a receiver does for a ball in
+            // the air. Whoever is under it first catches it.
+            if (_side == Systems_TeamSide.Offense && !_isBlocker && !_hasQuarterbackActions
+                && IsInReachOfLandingSpot(position))
+            {
+                return _ball.LandingSpot;
+            }
+
+            // A designed play (the QB challenge): every eligible team-mate of the
+            // human runs the card's job until the ball is caught or handed off.
+            if (_side == Systems_TeamSide.Offense && !_isBlocker && !_play.Design.IsNone
+                && !_hasQuarterbackActions && IsBallStillInTheBackfield())
+            {
+                return DesignedTarget(position);
+            }
+
             if (_isBlocker)
             {
-                Systems_IPlayerHandle opponent = NearestOpponent();
-                if (opponent == null)
-                {
-                    return new Vector2(position.x, position.y + 4f);
-                }
-
-                // RUN BLOCKING: FIRE OUT, THEN DRIVE (2026-10-16). Every snap was
-                // pass protection — stand on the rusher's line to the ball — and on
-                // a run the ball is a back six metres deep, so the whole line gave
-                // ground toward him: sampled on the merged build, the defensive
-                // front drove it from a metre behind the line to nearly five in
-                // 1.2 s, and the handoff was taken inside the collapse. Every
-                // snap now starts with the line coming off the ball into the man
-                // in front, aiming past him upfield; a run keeps driving, and only
-                // a called pass sets up to protect.
-                if (!_play.CallIsLatched || IsRunCall(_play.Call))
-                {
-                    return opponent.Position + new Vector2(0f, RUN_BLOCK_DRIVE_METRES);
-                }
-
-                Vector2 anchor = _ball == null ? position : _ball.Position;
-                Vector2 rusherToAnchor = anchor - opponent.Position;
-
-                // Degenerate only if a rusher is standing exactly on the ball, in
-                // which case there is no line to take and meeting him is correct.
-                if (rusherToAnchor.sqrMagnitude < 0.0001f)
-                {
-                    return opponent.Position;
-                }
-
-                return opponent.Position
-                    + (rusherToAnchor.normalized * Systems_SimConstants.BLOCK_CUSHION);
+                return BlockTarget(position);
             }
 
             // Backs clear the quarterback's retreat lane while the call is still
@@ -2089,6 +2131,303 @@ namespace PoFootball.Agents
                     -Systems_FieldModel.HALF_WIDTH,
                     Systems_FieldModel.HALF_WIDTH),
                 Systems_FieldModel.ATTACKING_GOAL_LINE_Y);
+        }
+
+        /// <summary>
+        /// Blockers stand BETWEEN the rusher and the ball rather than driving at
+        /// the rusher itself — see TargetPoint. Shared by the five linemen and, on
+        /// a designed play, by anyone whose job is Block.
+        /// </summary>
+        private Vector2 BlockTarget(Vector2 position)
+        {
+            Systems_IPlayerHandle opponent = NearestOpponent();
+            if (opponent == null)
+            {
+                return new Vector2(position.x, position.y + 4f);
+            }
+
+            // RUN BLOCKING: FIRE OUT, THEN DRIVE (2026-10-16). Every snap was
+            // pass protection — stand on the rusher's line to the ball — and on
+            // a run the ball is a back six metres deep, so the whole line gave
+            // ground toward him: sampled on the merged build, the defensive
+            // front drove it from a metre behind the line to nearly five in
+            // 1.2 s, and the handoff was taken inside the collapse. Every
+            // snap now starts with the line coming off the ball into the man
+            // in front, aiming past him upfield; a run keeps driving, and only
+            // a called pass sets up to protect.
+            // The EFFECTIVE call (Systems_PlayModel.EffectiveCall): the latched
+            // one, or a human quarterback's designed play before he commits —
+            // identical to the old test for every scripted snap.
+            Systems_PlayCall call = _play.EffectiveCall;
+
+            if (call == Systems_PlayCall.None || IsRunCall(call))
+            {
+                return opponent.Position + new Vector2(0f, RUN_BLOCK_DRIVE_METRES);
+            }
+
+            Vector2 anchor = _ball == null ? position : _ball.Position;
+            Vector2 rusherToAnchor = anchor - opponent.Position;
+
+            // Degenerate only if a rusher is standing exactly on the ball, in
+            // which case there is no line to take and meeting him is correct.
+            if (rusherToAnchor.sqrMagnitude < 0.0001f)
+            {
+                return opponent.Position;
+            }
+
+            return opponent.Position
+                + (rusherToAnchor.normalized * Systems_SimConstants.BLOCK_CUSHION);
+        }
+
+        /// <summary>
+        /// True while a designed play is still being run as designed: the
+        /// quarterback has the ball, or has thrown it and it is in the air.
+        /// </summary>
+        private bool IsBallStillInTheBackfield()
+        {
+            if (_ball == null)
+            {
+                return false;
+            }
+
+            if (_ball.IsHeld)
+            {
+                return _ball.CarrierId == Systems_Formation.QUARTERBACK_SLOT_INDEX;
+            }
+
+            return _ball.IsInFlight && _ball.PassKind != Systems_PassKind.Lateral;
+        }
+
+        /// <summary>
+        /// A pass to a spot is in the air and this player could get under it: no
+        /// further from where it comes down than he can run in the flight left, at
+        /// his top speed, plus the catch radius. Players out of reach keep doing
+        /// what they were.
+        /// </summary>
+        private bool IsInReachOfLandingSpot(Vector2 position)
+        {
+            if (_ball == null || !_ball.HasLandingSpot)
+            {
+                return false;
+            }
+
+            float secondsLeft = Mathf.Max(0, _ball.LandingTicks - _ball.FlightTicks) * Time.fixedDeltaTime;
+            float reach = (secondsLeft * _topSpeed) + Systems_SimConstants.CATCH_RADIUS;
+
+            return (_ball.LandingSpot - position).sqrMagnitude <= reach * reach;
+        }
+
+        /// <summary>
+        /// This player's job on the human quarterback's card (Systems_PlayDesign).
+        /// A back the human has handed off to closes on him first, whatever the
+        /// card said — the handoff completes on proximity (Systems_BallSystem
+        /// .TryHandoff), so the back has to come for it.
+        /// </summary>
+        private Vector2 DesignedTarget(Vector2 position)
+        {
+            if (_routeEpisode != _play.EpisodeIndex)
+            {
+                _routeEpisode = _play.EpisodeIndex;
+                _routeStart = position;
+                _routeLegComplete = false;
+            }
+
+            Systems_IPlayerHandle quarterback = _registry == null
+                ? null
+                : _registry.Get(Systems_Formation.QUARTERBACK_SLOT_INDEX);
+
+            if (_isBack && quarterback != null && IsDesignatedBallCarrierOnHandoff())
+            {
+                return quarterback.Position;
+            }
+
+            Systems_Route route = _play.Design.RouteOf(_formationSlotIndex);
+
+            if (route == Systems_Route.Handoff)
+            {
+                // Coming for the ball until the quarterback commits elsewhere: once
+                // a call has latched that is not this back's handoff, he blocks.
+                if (!_play.CallIsLatched && quarterback != null)
+                {
+                    return quarterback.Position;
+                }
+
+                route = Systems_Route.Block;
+            }
+
+            if (route == Systems_Route.Block)
+            {
+                return BlockTarget(position);
+            }
+
+            Vector2 target = Systems_RouteBook.TargetFor(
+                route, _routeStart, _play.LineOfScrimmageY, position,
+                ref _routeLegComplete, out float settleRadius);
+
+            _settleRadius = settleRadius;
+            return target;
+        }
+
+        /// <summary>
+        /// Whether the human is steering this player right now
+        /// (Systems_HumanControlModel.IsControlling).
+        /// </summary>
+        private bool IsHumanControlled()
+        {
+            return _humanControl != null
+                && _play != null
+                && _humanControl.IsControlling(
+                    _side == Systems_TeamSide.Offense,
+                    _isCarrier,
+                    _play.Phase == Systems_PlayPhase.Live);
+        }
+
+        /// <summary>
+        /// The human's player: run to the spot he tapped, act on a team-mate he
+        /// tapped, throw to a spot he double-tapped. Written into the same action
+        /// buffer a brain or the script would fill, so the mask's predicates and
+        /// the handlers judge it exactly as they judge them (Agent_ActionLegality).
+        /// </summary>
+        private void HumanControl(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions)
+        {
+            Vector2 command = _humanControl.CommandToward(Position, Velocity, _formationSlotIndex);
+            Vector2 up = Facing;
+            Vector2 left = new Vector2(-up.y, up.x);
+
+            continuousActions[0] = Vector2.Dot(command, up);
+            continuousActions[1] = Vector2.Dot(command, left);
+
+            int targetSlot = _humanControl.TakeAction();
+            Systems_IPlayerHandle mate =
+                targetSlot >= 0 && _registry != null ? _registry.Get(targetSlot) : null;
+
+            if (!_hasQuarterbackActions)
+            {
+                // Anyone but the quarterback: a tap on a team-mate level with
+                // him or behind is a pitch (to the nearest such man, the branch's
+                // only target).
+                if (mate != null
+                    && mate.Position.y - Position.y <= Systems_SimConstants.LATERAL_LEVEL_TOLERANCE)
+                {
+                    discreteActions[LATERAL_BRANCH] = LATERAL_PITCH;
+                }
+
+                return;
+            }
+
+            if (_humanControl.TakePass(out Vector2 spot))
+            {
+                HumanPassToSpot(continuousActions, discreteActions, spot);
+                return;
+            }
+
+            HumanQuarterback(continuousActions, discreteActions, mate);
+        }
+
+        /// <summary>
+        /// The double tap: a forward pass to the spot, if a run has not already
+        /// been committed to. The ball system brings it down there
+        /// (Systems_BallSystem.Throw); the aim here only has to point at it. A
+        /// spot inside MIN_CATCH_DISTANCE could never be caught by anybody and is
+        /// a tap on his own feet, not a throw.
+        /// </summary>
+        private void HumanPassToSpot(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions,
+            Vector2 spot)
+        {
+            Vector2 toSpot = spot - Position;
+
+            // Agent_ActionLegality.CanReleasePass's rules that hold before the call
+            // latches, checked first so a refused throw leaves no spot behind for
+            // the ball system to find on a later one.
+            if (toSpot.magnitude < Systems_SimConstants.MIN_CATCH_DISTANCE
+                || _play.ForwardPassThrown
+                || _play.PhysicsTick > Systems_SimConstants.THROW_WINDOW_TICKS
+                || Position.y > _play.LineOfScrimmageY)
+            {
+                return;
+            }
+
+            bool latched = _play.CallIsLatched;
+
+            if (latched && !_play.Call.IsPass())
+            {
+                return;
+            }
+
+            if (!latched)
+            {
+                discreteActions[PLAY_CALL_BRANCH] = _play.Design.IsPass
+                    ? (int)_play.Design.Call
+                    : (int)Systems_PlayCall.Pass;
+            }
+
+            _humanControl.NoteIntendedSpot(spot);
+
+            Vector2 aim = toSpot.normalized;
+            discreteActions[THROW_BRANCH] = THROW_RELEASE;
+            continuousActions[2] = aim.x;
+            continuousActions[3] = aim.y;
+        }
+
+        /// <summary>
+        /// The quarterback's tap on a team-mate beside or behind him (the QB
+        /// challenge system sends no other): a back within reach is a handoff,
+        /// anyone else a pitch. Nothing tapped and over the line of scrimmage with
+        /// no call is a keeper. Each latches its call on the spot
+        /// (HandleQuarterback). Passes are double taps, HumanPassToSpot.
+        /// </summary>
+        private void HumanQuarterback(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions,
+            Systems_IPlayerHandle mate)
+        {
+            bool latched = _play.CallIsLatched;
+
+            if (mate == null)
+            {
+                if (!latched && _play.Kind.HasLiveCall() && Position.y > _play.LineOfScrimmageY)
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = (int)Systems_PlayCall.KeepQuarterback;
+                }
+
+                return;
+            }
+
+            Vector2 offset = mate.Position - Position;
+            bool levelOrBehind = offset.y <= Systems_SimConstants.LATERAL_LEVEL_TOLERANCE;
+
+            if (levelOrBehind)
+            {
+                bool isBack = mate.Id == Systems_FormationBook.FULLBACK_SLOT_INDEX
+                    || mate.Id == Systems_FormationBook.HALFBACK_SLOT_INDEX;
+
+                if (!latched && isBack
+                    && offset.magnitude <= Systems_SimConstants.HANDOFF_RADIUS + HUMAN_HANDOFF_REACH_METRES)
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = mate.Id == Systems_FormationBook.FULLBACK_SLOT_INDEX
+                        ? (int)Systems_PlayCall.HandoffFullback
+                        : (int)Systems_PlayCall.HandoffHalfback;
+                    return;
+                }
+
+                // A pitch. With a pass already called the release would be a
+                // forward pass thrown backwards — refused rather than wasted.
+                if (latched && _play.Call.IsPass())
+                {
+                    return;
+                }
+
+                if (!latched)
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = (int)Systems_PlayCall.KeepQuarterback;
+                }
+
+                Vector2 pitch = offset.sqrMagnitude > 0.0001f ? offset.normalized : Vector2.down;
+                discreteActions[THROW_BRANCH] = THROW_RELEASE;
+                continuousActions[2] = pitch.x;
+                continuousActions[3] = pitch.y;
+            }
         }
 
         /// <summary>
@@ -2212,7 +2551,14 @@ namespace PoFootball.Agents
             // against the ball's velocity, puts them on its path instead.
             if (_ball.IsInFlight)
             {
-                return InterceptPoint(_ball.Position, _ball.Velocity);
+                // A pass to a spot can only be caught as it comes down, so a
+                // defender in reach goes to where it lands — once he has read it.
+                // Breaking for the spot the tick it left the hand, every defender
+                // was at the catch with the receiver: four catches of a played game
+                // (2026-10-23) went for 4.5, 0.3, 0.0 and -2.7 yards.
+                return _ball.FlightTicks >= DEFENDER_READ_TICKS && IsInReachOfLandingSpot(position)
+                    ? _ball.LandingSpot
+                    : InterceptPoint(_ball.Position, _ball.Velocity);
             }
 
             Systems_IPlayerHandle carrier = CurrentCarrier();

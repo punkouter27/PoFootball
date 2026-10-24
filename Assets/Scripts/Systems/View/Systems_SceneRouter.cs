@@ -82,7 +82,13 @@ namespace PoFootball.Views
         /// </summary>
         public static void LoadGame()
         {
-            LoadGameOn(Systems_GameSettings.SeedForNextGame);
+            LoadGame(Systems_GameVariant.Standard);
+        }
+
+        /// <summary>A new game of the given kind — the menu's QB CHALLENGE, or a rematch of one.</summary>
+        public static void LoadGame(Systems_GameVariant variant)
+        {
+            LoadGameOn(Systems_GameSettings.SeedForNextGame, variant);
         }
 
         /// <summary>
@@ -92,10 +98,15 @@ namespace PoFootball.Views
         /// </summary>
         public static void ReplayGame(uint seed)
         {
-            LoadGameOn(seed);
+            ReplayGame(seed, Systems_GameVariant.Standard);
         }
 
-        private static void LoadGameOn(uint seed)
+        public static void ReplayGame(uint seed, Systems_GameVariant variant)
+        {
+            LoadGameOn(seed, variant);
+        }
+
+        private static void LoadGameOn(uint seed, Systems_GameVariant variant)
         {
             if (_isLoading)
             {
@@ -112,6 +123,7 @@ namespace PoFootball.Views
             // After the guard for the same reason as the line above: a swallowed
             // tap must not change the seed of a load already under way.
             Systems_EpisodeSeed.RequestGameSeed(seed);
+            Systems_GameVariantRequest.Request(variant);
             Load(GAME_SCENE);
         }
 

@@ -22,6 +22,20 @@ namespace PoFootball.Views
     /// </summary>
     public sealed class Systems_MenuView : Systems_ScreenView
     {
+        private Systems_UiOverlay _settingsSheet;
+
+        /// <summary>Android Back with the settings sheet up closes it, as DONE does.</summary>
+        internal override bool HandleBack()
+        {
+            if (_settingsSheet == null || !_settingsSheet.IsVisible)
+            {
+                return false;
+            }
+
+            _settingsSheet.Hide();
+            return true;
+        }
+
         protected override void BuildUi()
         {
             // INSERT AT 0, NOT Add — the difference is the whole screen. Systems_
@@ -115,12 +129,33 @@ namespace PoFootball.Views
             hint.style.unityTextAlign = TextAnchor.MiddleCenter;
             action.Add(hint);
 
+            // The one-player mode: the human is the home quarterback for three
+            // minutes (Systems_QbChallengeSystem). A secondary action, because PLAY
+            // is still what the screen points at.
+            Button qbChallenge = Systems_UiTheme.Button(
+                "QB CHALLENGE", Systems_UiTheme.Accent,
+                () => Systems_SceneRouter.LoadGame(Systems_GameVariant.QbChallenge));
+            qbChallenge.style.marginTop = Systems_UiTheme.SPACE_L;
+            Systems_UiTheme.ApplySecondaryActionSize(qbChallenge);
+            action.Add(qbChallenge);
+
+            int best = Systems_GameSettings.QbChallengeBest;
+            Label qbHint = Systems_UiTheme.Text(
+                best > 0
+                    ? $"You're the QB. Score all you can in 3 minutes. Best: {best}."
+                    : "You're the QB. Score all you can in 3 minutes.",
+                Systems_UiTheme.TEXT_CAPTION,
+                Systems_UiTheme.TextMuted);
+            qbHint.style.unityTextAlign = TextAnchor.MiddleCenter;
+            action.Add(qbHint);
+
             // ONE WAY IN TO EVERYTHING THAT IS NOT PLAY. SOUND and GAME SEED were
             // two full-width buttons opening two separate sheets, so the screen
             // whose job is to point at one button had three of the same size, and
             // every setting added later would have been a fourth. They are two
             // tabs of one sheet now.
             Systems_UiOverlay settingsSheet = BuildSettingsSheet();
+            _settingsSheet = settingsSheet;
 
             Button settings = Systems_UiTheme.Button(
                 "SETTINGS", Systems_UiTheme.SurfaceRaised, settingsSheet.Show);
@@ -251,7 +286,8 @@ namespace PoFootball.Views
             for (int index = 0; index < titles.Length; index++)
             {
                 int selected = index;
-                tabButtons[index] = Tab(titles[index], () => SelectTab(selected, tabButtons, panes));
+                tabButtons[index] = Systems_UiTheme.Tab(
+                    titles[index], () => SelectTab(selected, tabButtons, panes));
 
                 if (index > 0)
                 {
@@ -276,20 +312,10 @@ namespace PoFootball.Views
             return overlay;
         }
 
-        private static Button Tab(string label, System.Action onClick)
-        {
-            Button tab = Systems_UiTheme.Button(label, Systems_UiTheme.SurfaceOverField, onClick);
-            tab.style.flexGrow = 1f;
-            tab.style.flexBasis = 0f;
-            tab.style.fontSize = Systems_UiTheme.TEXT_BODY;
-            return tab;
-        }
-
         /// <summary>
-        /// The selected tab takes the action tint — it is the sheet's title — and
-        /// the others drop back to chrome. Display rather than a fade between the
-        /// panes: they all occupy the same box, and a cross-fade would put two sets
-        /// of controls under the thumb for a fifth of a second.
+        /// Display rather than a fade between the panes: they all occupy the same
+        /// box, and a cross-fade would put two sets of controls under the thumb for
+        /// a fifth of a second.
         /// </summary>
         private static void SelectTab(int selected, Button[] tabs, VisualElement[] panes)
         {
@@ -297,13 +323,7 @@ namespace PoFootball.Views
             {
                 bool isSelected = index == selected;
 
-                tabs[index].style.backgroundColor = isSelected
-                    ? Systems_UiTheme.Action
-                    : Systems_UiTheme.SurfaceOverField;
-                tabs[index].style.color = isSelected
-                    ? Systems_UiTheme.SurfaceRaised
-                    : Systems_UiTheme.TextPrimary;
-
+                Systems_UiTheme.PaintTab(tabs[index], isSelected);
                 panes[index].style.display = isSelected ? DisplayStyle.Flex : DisplayStyle.None;
             }
         }

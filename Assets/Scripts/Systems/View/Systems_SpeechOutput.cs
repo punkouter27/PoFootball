@@ -55,7 +55,12 @@ namespace PoFootball.Views
 #endif
 
         private bool _failed;
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        // Android only: elsewhere nothing reads it, and an assignment the compiler
+        // can see is never read is a CS0414 in every Editor console.
         private bool _started;
+#endif
 
         public void Speak(string line)
         {
@@ -96,8 +101,6 @@ namespace PoFootball.Views
                 _failed = true;
                 Debug.LogWarning("[PoFootball] Speech is off for this session: " + exception.Message);
             }
-#else
-            _started = true;
 #endif
         }
 

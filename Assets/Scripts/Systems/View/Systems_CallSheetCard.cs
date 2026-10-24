@@ -43,6 +43,13 @@ namespace PoFootball.Views
 
         private const int BAR_HEIGHT = 8;
 
+        /// <summary>
+        /// Room for "100% PASS" and "RUN 100%". It was 92, sized for two digits,
+        /// and a scripted call with no run option read 100% PASS straight over the
+        /// end of the bar — the one overflow the aspect sweep found.
+        /// </summary>
+        private const int RATIO_LABEL_WIDTH = 116;
+
         private readonly Label _defenseSource;
         private readonly Label _defenseCall;
         private readonly Label _defenseChance;
@@ -96,7 +103,7 @@ namespace PoFootball.Views
 
             _runLabel = Systems_UiTheme.Text(
                 string.Empty, Systems_UiTheme.TEXT_CAPTION, Systems_UiTheme.TextPrimary, FontStyle.Bold);
-            _runLabel.style.width = 92;
+            _runLabel.style.width = RATIO_LABEL_WIDTH;
 
             VisualElement track = new VisualElement();
             track.style.flexGrow = 1f;
@@ -115,7 +122,7 @@ namespace PoFootball.Views
 
             _passLabel = Systems_UiTheme.Text(
                 string.Empty, Systems_UiTheme.TEXT_CAPTION, Systems_UiTheme.TextPrimary, FontStyle.Bold);
-            _passLabel.style.width = 92;
+            _passLabel.style.width = RATIO_LABEL_WIDTH;
             _passLabel.style.unityTextAlign = TextAnchor.MiddleRight;
 
             offenseRow.Add(_runLabel);
@@ -202,6 +209,17 @@ namespace PoFootball.Views
 
         private void WriteOffense(Systems_ICallSheetSource sheet, bool hasOffense)
         {
+            // The human's own call: no chances exist, and a bar at 50% would read
+            // as a coin toss he never made.
+            if (hasOffense && sheet.OffenseSource == Systems_CallSource.Human)
+            {
+                _runLabel.text = "YOUR";
+                _passLabel.text = "CALL";
+                _runFill.style.width = Length.Percent(0f);
+                _offenseSource.text = SourceText(sheet.OffenseSource, false);
+                return;
+            }
+
             if (!hasOffense || sheet.OffenseSource == Systems_CallSource.PolicyChoiceOnly)
             {
                 _runLabel.text = "RUN ?";
@@ -235,6 +253,16 @@ namespace PoFootball.Views
 
             float chance = sheet.OffenseChance(call);
             return chance > 0f ? "  " + Percent(chance) : string.Empty;
+        }
+
+        /// <summary>
+        /// Off for good: the game is over. Refresh keys on the play's phase, and
+        /// the whistle can leave that at PreSnap — the card then sat over the
+        /// result sheet and under every highlight.
+        /// </summary>
+        public void Hide()
+        {
+            SetVisible(false);
         }
 
         private void SetVisible(bool visible)
@@ -275,6 +303,8 @@ namespace PoFootball.Views
                     return "AI · sampled " + Systems_CallSheet.POLICY_SAMPLES + "×";
                 case Systems_CallSource.PolicyChoiceOnly:
                     return "AI CALL · odds not readable";
+                case Systems_CallSource.Human:
+                    return "YOU · QB challenge";
                 default:
                     return string.Empty;
             }

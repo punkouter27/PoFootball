@@ -94,6 +94,8 @@ namespace PoFootball.Tests
 
             public bool IsInterceptionHeld() => InterceptionHeld;
 
+            public bool IsInterceptionHeld(float holdChance) => InterceptionHeld;
+
             public bool IsHitTackleMade(
                 Systems_PlayerRole carrier, float tacklerFatigue, float carrierFatigue) => HitMade;
 
@@ -168,6 +170,16 @@ namespace PoFootball.Tests
         private Systems_PenaltySystem _penalties;
         private StubPlayer _quarterback;
 
+        /// <summary>Open, as every game but the QB challenge has it, unless a test shuts it.</summary>
+        private readonly StubGate _gate = new StubGate();
+
+        private sealed class StubGate : Systems_ISnapGate
+        {
+            public bool IsOpen { get; set; } = true;
+
+            public bool IsHumanSnap { get; set; }
+        }
+
         [SetUp]
         public void SetUp()
         {
@@ -216,7 +228,8 @@ namespace PoFootball.Tests
                 _skill,
                 _penalties,
                 new Systems_NoDisciplineModel(),
-                _ended, _tackled, _scored);
+                _ended, _tackled, _scored,
+                _gate);
 
             _play.BeginEpisode(0f, _quarterback.Position.y, 1, Systems_GameRules.YARDS_TO_GAIN);
             _play.Snap();
@@ -368,6 +381,91 @@ namespace PoFootball.Tests
             Assert.That(_ball.CarrierId, Is.EqualTo(6));
             Assert.That(_play.Phase, Is.EqualTo(Systems_PlayPhase.Live), "a completion is not a whistle");
         }
+
+        // --- The QB challenge's pass to a spot -------------------------------
+
+        /// <summary>A ball system with the QB challenge's human, his spot noted.</summary>
+        private Systems_BallSystem SpotPassBallSystem(Vector2 spot)
+        {
+            Systems_HumanControlModel control = new Systems_HumanControlModel(true);
+            control.NoteIntendedSpot(spot);
+
+            return new Systems_BallSystem(_ball, _play, _registry, _skill, _thrown, _caught, control);
+        }
+
+        private Systems_BallEvent FlyUntilItEnds(Systems_BallSystem ballSystem, out float peak)
+        {
+            peak = 0f;
+
+            for (int tick = 0; tick < 200; tick++)
+            {
+                Systems_BallEvent ballEvent = ballSystem.Tick();
+                peak = Mathf.Max(peak, _ball.Height);
+
+                if (ballEvent.Outcome != Systems_PlayOutcome.None || _ball.IsHeld)
+                {
+                    return ballEvent;
+                }
+            }
+
+            return Systems_BallEvent.None;
+        }
+
+        [Test]
+        public void ASpotPass_ComesDownOnTheSpot_AndIsIncompleteThereWithNobodyUnderIt()
+        {
+            _quarterback.Position = Vector2.zero;
+            MoveEveryoneFarAway();
+            Vector2 spot = new Vector2(6f, 24f);
+
+            Systems_BallSystem ballSystem = SpotPassBallSystem(spot);
+            ballSystem.Throw(_quarterback, Vector2.up, 0f);
+
+            Systems_BallEvent ended = FlyUntilItEnds(ballSystem, out float peak);
+
+            Assert.That(ended.Outcome, Is.EqualTo(Systems_PlayOutcome.Incompletion));
+            Assert.That(Vector2.Distance(_ball.Position, spot), Is.LessThan(0.6f), "down on the spot, not short or long");
+            Assert.That(peak, Is.GreaterThan(SPOT_CATCH_HEIGHT), "a 25 m ball goes over heads");
+        }
+
+        [Test]
+        public void ASpotPass_SailsOverTheManInTheLane_ToTheManUnderIt()
+        {
+            _quarterback.Position = Vector2.zero;
+            MoveEveryoneFarAway();
+
+            StubPlayer safety = (StubPlayer)_registry.Get(20);
+            safety.Position = new Vector2(0f, 13f);
+            StubPlayer receiver = (StubPlayer)_registry.Get(6);
+            receiver.Position = new Vector2(0f, 26f);
+
+            Systems_BallSystem ballSystem = SpotPassBallSystem(new Vector2(0f, 26f));
+            ballSystem.Throw(_quarterback, Vector2.up, 0f);
+            FlyUntilItEnds(ballSystem, out _);
+
+            Assert.That(_ball.IsHeld, Is.True);
+            Assert.That(_ball.CarrierId, Is.EqualTo(6), "the safety under the top of the arc could not reach it");
+        }
+
+        [Test]
+        public void AShortSpotPass_IsAFlatBullet_ThatTheManInTheLaneCanTake()
+        {
+            _quarterback.Position = Vector2.zero;
+            MoveEveryoneFarAway();
+
+            StubPlayer linebacker = (StubPlayer)_registry.Get(16);
+            linebacker.Role = Systems_PlayerRole.Linebacker;
+            linebacker.Position = new Vector2(0f, 5f);
+
+            Systems_BallSystem ballSystem = SpotPassBallSystem(new Vector2(0f, 9f));
+            ballSystem.Throw(_quarterback, Vector2.up, 0f);
+            FlyUntilItEnds(ballSystem, out float peak);
+
+            Assert.That(peak, Is.LessThan(SPOT_CATCH_HEIGHT), "short is flat");
+            Assert.That(_ball.IsHeld && _ball.CarrierId == 16, Is.True, "and a defender in its path is in the play");
+        }
+
+        private const float SPOT_CATCH_HEIGHT = Systems_BallSystem.SPOT_PASS_CATCH_HEIGHT;
 
         /// <summary>
         /// Regression test for run football_base03. Without a minimum travel
@@ -1808,6 +1906,36 @@ namespace PoFootball.Tests
             for (int tick = 0; tick < Systems_SimConstants.PRESNAP_TICKS; tick++)
             {
                 Assert.That(_play.Phase, Is.EqualTo(Systems_PlayPhase.PreSnap));
+                _referee.FixedTick();
+            }
+
+            Assert.That(_play.Phase, Is.EqualTo(Systems_PlayPhase.Live));
+        }
+
+        /// <summary>
+        /// The QB challenge holds the snap until the human hikes. Held BEFORE the
+        /// count, so the pre-snap — and the kick window inside it — starts from
+        /// zero once the gate opens (Systems_ISnapGate).
+        /// </summary>
+        [Test]
+        public void AShutSnapGate_HoldsThePreSnapAtItsFirstTick()
+        {
+            _play.BeginEpisode(0f, _quarterback.Position.y, 4, Systems_GameRules.YARDS_TO_GAIN);
+            _gate.IsOpen = false;
+
+            for (int tick = 0; tick < Systems_SimConstants.PRESNAP_TICKS * 5; tick++)
+            {
+                _referee.FixedTick();
+            }
+
+            Assert.That(_play.Phase, Is.EqualTo(Systems_PlayPhase.PreSnap));
+            Assert.That(_play.PreSnapTick, Is.Zero, "held before the count started");
+            Assert.That(_play.CanCallKick, Is.True, "so a fourth-down kick can still be called");
+
+            _gate.IsOpen = true;
+
+            for (int tick = 0; tick < Systems_SimConstants.PRESNAP_TICKS; tick++)
+            {
                 _referee.FixedTick();
             }
 

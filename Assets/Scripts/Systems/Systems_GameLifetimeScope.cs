@@ -54,6 +54,21 @@ namespace PoFootball.Systems
         {
             Systems_EpisodeSeed.Set(ResolveSeed());
 
+            // Which game this is. Taken in both modes, so a request can never be
+            // left lying around for a training scene; honoured only in a played one.
+            Systems_GameVariant requestedVariant = Systems_GameVariantRequest.Take();
+            Systems_GameVariant variant = _simMode == Systems_SimMode.Game
+                ? requestedVariant
+                : Systems_GameVariant.Standard;
+
+            builder.RegisterInstance(variant);
+
+            // The human quarterback's pointer, picks and hand. Both modes, because
+            // every agent asks it whether it is being steered; outside the QB
+            // challenge it is disabled and the answer is always no.
+            builder.RegisterInstance(
+                new Systems_HumanControlModel(variant == Systems_GameVariant.QbChallenge));
+
             // Registered in both modes. Every presentation view injects it and
             // switches itself off when it says no, which is why there is exactly
             // one place that decides whether a graphics pass is allowed to cost
@@ -158,6 +173,8 @@ namespace PoFootball.Systems
             builder.RegisterMessageBroker<Systems_GrindMessage>(messagePipeOptions);
             builder.RegisterMessageBroker<Systems_TurfCutMessage>(messagePipeOptions);
             builder.RegisterMessageBroker<Systems_HighlightPlaybackMessage>(messagePipeOptions);
+            builder.RegisterMessageBroker<Systems_HighlightsReadyMessage>(messagePipeOptions);
+            builder.RegisterMessageBroker<Systems_OpenHighlightsMessage>(messagePipeOptions);
 
             // Registered in both modes so a view can subscribe without caring which
             // one it is in. In training nothing ever publishes them.
@@ -177,7 +194,7 @@ namespace PoFootball.Systems
 
             if (_simMode == Systems_SimMode.Game)
             {
-                ConfigureGameLayer(builder);
+                ConfigureGameLayer(builder, variant);
 
                 // A played game has no episodes and no rewards to assign. The
                 // director calls the boundary either way; here it does nothing.
@@ -221,15 +238,25 @@ namespace PoFootball.Systems
             // consumed before the referee evaluates the new play. The game layer is
             // registered above it, so the scoreboard has kicked off before the
             // director asks it where the first snap goes.
+            // Only the QB challenge ever holds the snap; it registered its own gate
+            // in the game layer above.
+            if (variant != Systems_GameVariant.QbChallenge)
+            {
+                builder.Register<Systems_ISnapGate, Systems_OpenSnapGate>(Lifetime.Singleton);
+            }
+
             builder.RegisterEntryPoint<Systems_EpisodeDirector>().AsSelf();
             builder.RegisterEntryPoint<Systems_Referee>().AsSelf();
 
             builder.RegisterBuildCallback(InjectSceneBehaviours);
         }
 
-        private static void ConfigureGameLayer(IContainerBuilder builder)
+        private static void ConfigureGameLayer(IContainerBuilder builder, Systems_GameVariant variant)
         {
-            builder.Register<Systems_GameModel>(Lifetime.Singleton);
+            bool isQbChallenge = variant == Systems_GameVariant.QbChallenge;
+
+            builder.RegisterInstance(new Systems_GameModel(
+                isQbChallenge ? Systems_GameLength.QbChallenge : Systems_GameLength.Standard));
             builder.Register<Systems_BoxScore>(Lifetime.Singleton);
 
             // ONE registration carrying three roles: the entry point that starts
@@ -260,6 +287,16 @@ namespace PoFootball.Systems
             // the config, and nothing in training may touch Time.timeScale. The
             // container disposes it on unload, which is what resets the scale.
             builder.Register<Systems_SimSpeedSystem>(Lifetime.Singleton);
+
+            // The QB challenge: the hand, the held snap, the human's clicks. An
+            // entry point registered before the director and the referee, so it
+            // ticks first and the gate is current for the tick they read it.
+            if (isQbChallenge)
+            {
+                builder.RegisterEntryPoint<Systems_QbChallengeSystem>()
+                    .As<Systems_ISnapGate>()
+                    .AsSelf();
+            }
         }
 
         /// <summary>

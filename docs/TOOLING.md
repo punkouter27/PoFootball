@@ -49,7 +49,7 @@ Both suites are driven through the pipeline. **Scope every run to this project's
 assemblies** — the filter is not optional in practice:
 
 ```powershell
-# EditMode — 134 PoFootball tests. Blocks the Editor for the duration.
+# EditMode — 369 PoFootball tests (2026-10-22). Blocks the Editor for the duration.
 unity command --timeout 600 run_tests --mode editor `
   --filter PoFootball --filter_type assembly
 
@@ -80,6 +80,37 @@ stay wedged afterwards with the port still listening but nothing answering. Pass
 
 **Never start a test run while play mode is active.** It tears down the running
 scene, and an EditMode run additionally forces a domain reload out from under it.
+
+**Poll a PlayMode run gently.** An HTTP call that lands while play mode holds the
+main thread can log `Failed to handle /api/exec request` as an error, and the test
+runner fails whichever test was running on any logged error
+(`Systems_ConsoleHealthTests` ignores that one message by name; the others do not).
+`editor_status` every 45 s until `playMode` is `stopped`, then read
+`Temp/pipeline_test_status.json` — the file appears when the run completes, not
+before.
+
+## UI checks
+
+Every player-facing screen is checked on five portrait ratios (16:9, 18:9, 19.5:9,
+20:9, 21:9) by `Systems_UiFitAudit` — the same audit the DEBUG sheet runs on a
+handset. It reports text cut off by an edge, single lines wider than their box,
+anything that scrolls, and controls in the top 40% of the screen where a thumb
+does not reach (`Systems_UiTheme.REACH_EXEMPT_CLASS` marks the deliberate ones —
+today only the status HUD's MENU chip).
+
+| What | Where | Fails on |
+|---|---|---|
+| `Systems_AspectSweepTests` (PlayMode) | menu, SETTINGS, live game, final, final + SCORING × 5 ratios, plus a simulated notch at 20:9 | any audit finding |
+| `Systems_StateFlowTests` (PlayMode) | double-tapped REMATCH, MENU mid-load, SAME GAME, the final tabs, every Android Back route | a dead end, a queued load, a wrong seed |
+| `Systems_ConsoleHealthTests` (PlayMode) | the full loop with the console listened to | any error, or a warning that means broken layout |
+| `Systems_SceneIntegrityTests` (EditMode) | all three scenes, opened additively | missing scripts, references to deleted objects |
+| *Tools → PoFootball → UI → Capture Screens (5 ratios)* | the same screens, photographed, with an `audit.json` beside them | — it records, for a before/after report |
+
+The capture tool takes its folder name from EditorPrefs `PoFootball.UiCaptureLabel`
+(`SCREENSHOTS/ui_<label>/`), so a script can set "before" or "after" and press the
+menu item. It enters play mode itself from `SCN_MENU` without opening the scene,
+and puts the rendering resolution back when it ends — but it leaves the Editor in
+play mode; stop it before compiling.
 
 ## MCP servers
 

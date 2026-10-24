@@ -56,8 +56,15 @@ namespace PoFootball.Views
         /// Width of each team's block at the two ends of the bar. Fixed and equal,
         /// so the situation group between them is centred on the screen rather
         /// than on whichever score happens to be wider.
+        ///
+        /// 168, WAS 120, BECAUSE THE BLOCK LIES ON ITS SIDE NOW. Tag, score and
+        /// timeouts were stacked three deep, which made the score row 147 units
+        /// tall for three short things. The tag and its timeouts are one column
+        /// beside the score, so the row is as tall as the clock group and no
+        /// taller (Systems_HudLayout.SCORE_ROW_HEIGHT). "HOM" at body size and a
+        /// two-digit score at TEXT_SCORE come to about 150 side by side.
         /// </summary>
-        private const int TEAM_BLOCK_WIDTH = 120;
+        private const int TEAM_BLOCK_WIDTH = 168;
 
         /// <summary>
         /// Width reserved on EACH side of the down-and-distance pill: the quarter
@@ -105,6 +112,14 @@ namespace PoFootball.Views
         /// the final sheet: half the row, the other two a quarter each.
         /// </summary>
         private const float PRIMARY_DOCK_WEIGHT = 2f;
+
+        /// <summary>
+        /// Height of the final sheet's tabs: a chip and a gap either side. Shorter
+        /// than the settings sheet's, which are the sheet's only controls; here they
+        /// share it with a row of three full tap targets and twelve lines of
+        /// numbers, and every unit they take is one the box score does not get.
+        /// </summary>
+        private const int FINAL_TAB_HEIGHT = Systems_UiTheme.STATUS_CHIP_HEIGHT + Systems_UiTheme.SPACE_M;
 
         /// <summary>Side of the pause glyph inside its tap-target-sized button.</summary>
         private const int TRANSPORT_ICON_SIZE = 36;
@@ -174,11 +189,14 @@ namespace PoFootball.Views
         private ISubscriber<Systems_GameOverMessage> _gameOverSubscriber;
         private ISubscriber<Systems_PlaySnappedMessage> _snappedSubscriber;
         private ISubscriber<Systems_HighlightPlaybackMessage> _highlightSubscriber;
+        private ISubscriber<Systems_HighlightsReadyMessage> _readySubscriber;
+        private IPublisher<Systems_OpenHighlightsMessage> _openHighlightsPublisher;
 
         private IDisposable _resolvedSubscription;
         private IDisposable _gameOverSubscription;
         private IDisposable _snappedSubscription;
         private IDisposable _highlightSubscription;
+        private IDisposable _readySubscription;
 
         /// <summary>
         /// Set at the final whistle and never cleared. The final overlay's own
@@ -219,6 +237,27 @@ namespace PoFootball.Views
         /// at kickoff would only have to be thrown away.
         /// </summary>
         private VisualElement _finalCardHost;
+
+        // The final sheet's tabs. BOX SCORE and SCORING are panes in one host —
+        // the box score in flow, sizing it, and the scoring card pinned over it —
+        // and HIGHLIGHTS is a tab that hands the screen to the reel. It stays off
+        // until Systems_ReplayView says it has something to show.
+        private Button _boxScoreTab;
+        private Button _scoringTab;
+        private Button _highlightsTab;
+        private VisualElement _boxScorePane;
+        private VisualElement _scoringPane;
+        private int _highlightCount;
+
+        // The scoring summary, collected as the downs resolve. Allocated once at
+        // the field declarations; a string per scoring play, which is a handful a
+        // game, and nothing on any other down.
+        private readonly Systems_ScoringCard.Entry[] _scoring = new Systems_ScoringCard.Entry[32];
+        private int _scoringCount;
+        private int _homeRunning;
+        private int _awayRunning;
+        private readonly int[] _homeByPeriod = new int[Systems_ScoringCard.PERIODS];
+        private readonly int[] _awayByPeriod = new int[Systems_ScoringCard.PERIODS];
 
         /// <summary>Last whole second rendered, so the clock label is not rebuilt per frame.</summary>
         private int _lastClockKey = -1;
@@ -316,6 +355,45 @@ namespace PoFootball.Views
         private int _lastFocusFatiguePercent = -1;
         private FocusState _lastFocusState = FocusState.None;
 
+        /// <summary>
+        /// The QB challenge's human (Systems_HumanControlModel). When it is
+        /// enabled the field surface stops being the spectator's — no pan, no
+        /// focus tap — and becomes the quarterback's pointer: a press is a click
+        /// (hike, throw, handoff), a move is where he runs.
+        /// </summary>
+        private Systems_HumanControlModel _humanControl;
+
+        private Systems_GameVariant _variant;
+
+        /// <summary>The nine-play sheet; built only for the QB challenge.</summary>
+        private Systems_PlaySheetCard _playSheet;
+
+        /// <summary>
+        /// Where the pointer last was on the panel, kept so its point on the field
+        /// can be re-read every frame: the camera follows the play, so the man
+        /// under a resting mouse changes while it does not move.
+        /// </summary>
+        private Vector2 _humanPointerPanel;
+
+        private bool _hasHumanPointer;
+
+        /// <summary>
+        /// What a tap did and would do, drawn on the field: a ring under the
+        /// team-mate a tap would hand or pitch to, and a dot on the spot the
+        /// carrier is running to or the pass is coming down on. Without them the
+        /// only cue was the hint line's text, a glance away from the play.
+        /// </summary>
+        private VisualElement _hoverRing;
+
+        private VisualElement _pointerDot;
+
+        /// <summary>Ring diameter in metres on the field: a body and a stride around it.</summary>
+        private const float HOVER_RING_METRES = 2.6f;
+
+        private const float POINTER_DOT_UNITS = 22f;
+
+        private bool IsHumanPointer => _humanControl != null && _humanControl.IsEnabled && !_gameOver;
+
         [Inject]
         public void Construct(
             Systems_GameModel game,
@@ -330,8 +408,14 @@ namespace PoFootball.Views
             ISubscriber<Systems_DownResolvedMessage> resolvedSubscriber,
             ISubscriber<Systems_GameOverMessage> gameOverSubscriber,
             ISubscriber<Systems_PlaySnappedMessage> snappedSubscriber,
-            ISubscriber<Systems_HighlightPlaybackMessage> highlightSubscriber)
+            ISubscriber<Systems_HighlightPlaybackMessage> highlightSubscriber,
+            ISubscriber<Systems_HighlightsReadyMessage> readySubscriber,
+            IPublisher<Systems_OpenHighlightsMessage> openHighlightsPublisher,
+            Systems_HumanControlModel humanControl,
+            Systems_GameVariant variant)
         {
+            _humanControl = humanControl;
+            _variant = variant;
             _game = game;
             _play = play;
             _ball = ball;
@@ -345,6 +429,8 @@ namespace PoFootball.Views
             _gameOverSubscriber = gameOverSubscriber;
             _snappedSubscriber = snappedSubscriber;
             _highlightSubscriber = highlightSubscriber;
+            _readySubscriber = readySubscriber;
+            _openHighlightsPublisher = openHighlightsPublisher;
         }
 
         protected override void Start()
@@ -359,6 +445,7 @@ namespace PoFootball.Views
             _gameOverSubscription = _gameOverSubscriber?.Subscribe(OnGameOver);
             _snappedSubscription = _snappedSubscriber?.Subscribe(OnSnapped);
             _highlightSubscription = _highlightSubscriber?.Subscribe(OnHighlightPlayback);
+            _readySubscription = _readySubscriber?.Subscribe(OnHighlightsReady);
         }
 
         private void OnDestroy()
@@ -367,6 +454,7 @@ namespace PoFootball.Views
             _gameOverSubscription?.Dispose();
             _snappedSubscription?.Dispose();
             _highlightSubscription?.Dispose();
+            _readySubscription?.Dispose();
         }
 
         protected override void BuildUi()
@@ -398,6 +486,31 @@ namespace PoFootball.Views
             layer.Add(BuildCarrierChip());
             layer.Add(BuildFocusCard());
             layer.Add(BuildSpeedControl());
+
+            // The QB challenge's play sheet, over the field and under the banner.
+            if (_humanControl != null && _humanControl.IsEnabled)
+            {
+                _playSheet = new Systems_PlaySheetCard(_humanControl, _play, _registry);
+                layer.Add(_playSheet.Root);
+
+                _hoverRing = new VisualElement { name = "HoverRing" };
+                _hoverRing.style.position = Position.Absolute;
+                _hoverRing.pickingMode = PickingMode.Ignore;
+                Systems_UiTheme.SetBorder(_hoverRing, 4, Systems_UiTheme.Accent);
+                _hoverRing.style.display = DisplayStyle.None;
+                layer.Add(_hoverRing);
+
+                _pointerDot = new VisualElement { name = "PointerDot" };
+                _pointerDot.style.position = Position.Absolute;
+                _pointerDot.style.width = POINTER_DOT_UNITS;
+                _pointerDot.style.height = POINTER_DOT_UNITS;
+                _pointerDot.style.backgroundColor = new Color(1f, 1f, 1f, 0.55f);
+                _pointerDot.pickingMode = PickingMode.Ignore;
+                Systems_UiTheme.SetRadius(_pointerDot, (int)(POINTER_DOT_UNITS / 2f));
+                Systems_UiTheme.SetBorder(_pointerDot, 2, Systems_UiTheme.Surface);
+                _pointerDot.style.display = DisplayStyle.None;
+                layer.Add(_pointerDot);
+            }
 
             _bannerOverlay = BuildBanner();
             layer.Add(_bannerOverlay.Root);
@@ -442,6 +555,7 @@ namespace PoFootball.Views
         private VisualElement BuildScoreboard()
         {
             VisualElement bar = Systems_UiTheme.Row();
+            bar.name = "ScoreRow";
             bar.style.position = Position.Absolute;
             bar.style.left = 0;
             bar.style.right = 0;
@@ -645,9 +759,18 @@ namespace PoFootball.Views
             out VisualElement possessionDot,
             out VisualElement[] timeoutPips)
         {
-            VisualElement block = Systems_UiTheme.Column();
+            // ON ITS SIDE: tag over timeouts in one column, the score beside it,
+            // nearest the middle — "HOM 7 ... 14 AWY", the order a broadcast bar
+            // reads in. See TEAM_BLOCK_WIDTH for the height this gave back.
+            bool home = team == Systems_TeamId.Home;
+
+            VisualElement block = Systems_UiTheme.Row();
             block.style.alignItems = Align.Center;
+            block.style.justifyContent = home ? Justify.FlexStart : Justify.FlexEnd;
             block.style.width = TEAM_BLOCK_WIDTH;
+
+            VisualElement identity = Systems_UiTheme.Column();
+            identity.style.alignItems = Align.Center;
 
             VisualElement nameRow = Systems_UiTheme.Row();
             nameRow.style.justifyContent = Justify.Center;
@@ -684,9 +807,22 @@ namespace PoFootball.Views
             // to redraw a glyph in place and nothing else.
             Systems_UiTheme.EnablePulse(scoreLabel);
 
-            block.Add(nameRow);
-            block.Add(scoreLabel);
-            block.Add(BuildTimeoutPips(team, out timeoutPips));
+            identity.Add(nameRow);
+            identity.Add(BuildTimeoutPips(team, out timeoutPips));
+
+            if (home)
+            {
+                scoreLabel.style.marginLeft = Systems_UiTheme.SPACE_M;
+                block.Add(identity);
+                block.Add(scoreLabel);
+            }
+            else
+            {
+                scoreLabel.style.marginRight = Systems_UiTheme.SPACE_M;
+                block.Add(scoreLabel);
+                block.Add(identity);
+            }
+
             return block;
         }
 
@@ -960,12 +1096,24 @@ namespace PoFootball.Views
             _fieldSurface.RegisterCallback<PointerUpEvent>(OnFieldPointerUp);
             _fieldSurface.RegisterCallback<PointerCancelEvent>(OnFieldPointerCancel);
             _fieldSurface.RegisterCallback<WheelEvent>(OnFieldWheel);
+            _fieldSurface.RegisterCallback<PointerLeaveEvent>(OnFieldPointerLeave);
 
             return _fieldSurface;
         }
 
         private void OnFieldPointerDown(PointerDownEvent evt)
         {
+            if (IsHumanPointer)
+            {
+                // The primary button or a finger; anything else is ignored.
+                if (evt.button == 0)
+                {
+                    HumanPointer(evt.position, true);
+                }
+
+                return;
+            }
+
             int slot = PointerSlot(NO_POINTER);
 
             if (slot < 0)
@@ -988,6 +1136,12 @@ namespace PoFootball.Views
 
         private void OnFieldPointerMove(PointerMoveEvent evt)
         {
+            if (IsHumanPointer)
+            {
+                HumanPointer(evt.position, false);
+                return;
+            }
+
             int slot = PointerSlot(evt.pointerId);
 
             if (slot < 0)
@@ -1021,6 +1175,18 @@ namespace PoFootball.Views
 
         private void OnFieldPointerUp(PointerUpEvent evt)
         {
+            if (IsHumanPointer)
+            {
+                // A lifted finger is not hovering over anybody; a mouse still is.
+                if (evt.pointerType == UnityEngine.UIElements.PointerType.touch)
+                {
+                    _hasHumanPointer = false;
+                    _humanControl.ClearPointer();
+                }
+
+                return;
+            }
+
             int slot = PointerSlot(evt.pointerId);
 
             if (slot < 0)
@@ -1523,10 +1689,19 @@ namespace PoFootball.Views
         /// sheet ends where the status footer begins, and everything above it is
         /// the final frame of the game under the scoreboard — dimmed, not hidden.
         ///
-        /// NOTHING SCROLLS AND NOTHING NEEDS TO. The sheet measures 757 panel units
-        /// and the panel is never shorter than 1920 (it scales on width, and 9:16
-        /// is the squarest portrait handset there is), so its top edge is at 1019
-        /// at the lowest — 800 units clear of the scoreboard.
+        /// NOTHING SCROLLS AND NOTHING NEEDS TO. The sheet measures about 830 panel
+        /// units with its tab row, and the panel is never shorter than 1920 (it
+        /// scales on width, and 9:16 is the squarest portrait handset there is), so
+        /// its top edge is at about 1020 at the lowest — well clear of the
+        /// scoreboard. Systems_AspectSweepTests holds that on five ratios.
+        ///
+        /// THREE TABS, ONE SHEET: BOX SCORE, SCORING, HIGHLIGHTS. The result, when
+        /// it was scored and the replay of it are three views of the same game,
+        /// and they were three places — this card, nowhere at all, and a WATCH
+        /// HIGHLIGHTS chip floating on another document between this sheet and the
+        /// status footer, which the sheet had to be lifted to clear. HIGHLIGHTS is
+        /// a tab that hands the screen to the reel rather than a pane, because the
+        /// highlight plays on the field and the field is what this sheet covers.
         /// </summary>
         private Systems_UiOverlay BuildFinalOverlay()
         {
@@ -1538,11 +1713,9 @@ namespace PoFootball.Views
 
             overlay.Content.style.justifyContent = Justify.FlexEnd;
 
-            // Clear of the status footer AND of the WATCH HIGHLIGHTS chip that
-            // Systems_HighlightReel docks directly above it, on its own document.
-            // The two read as one stack: sheet, highlights, footer.
-            overlay.Content.style.paddingBottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT
-                + Systems_UiTheme.STATUS_CHIP_HEIGHT + (Systems_UiTheme.SPACE_S * 2);
+            // Clear of the status footer, and of nothing else: the highlights chip
+            // that used to dock between the two is the sheet's third tab now.
+            overlay.Content.style.paddingBottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT;
 
             VisualElement sheet = Systems_UiTheme.BottomSheet();
             sheet.name = "FinalSheet";
@@ -1561,6 +1734,25 @@ namespace PoFootball.Views
             _finalCardHost.style.marginBottom = Systems_UiTheme.SPACE_M;
             _finalCardHost.pickingMode = PickingMode.Ignore;
 
+            VisualElement tabs = Systems_UiTheme.Row();
+            tabs.name = "FinalTabs";
+            tabs.style.marginTop = Systems_UiTheme.SPACE_S;
+            tabs.style.marginBottom = Systems_UiTheme.SPACE_S;
+
+            _boxScoreTab = FinalTab("BOX SCORE", () => SelectFinalPane(false));
+            _scoringTab = FinalTab("SCORING", () => SelectFinalPane(true));
+            _highlightsTab = FinalTab("HIGHLIGHTS", OnHighlightsTab);
+            _scoringTab.style.marginLeft = Systems_UiTheme.SPACE_S;
+            _highlightsTab.style.marginLeft = Systems_UiTheme.SPACE_S;
+
+            // Off until the reel reports in. A tab that opens nothing is worse
+            // than no tab, and on a budget that builds no replay it never will.
+            _highlightsTab.style.display = DisplayStyle.None;
+
+            tabs.Add(_boxScoreTab);
+            tabs.Add(_scoringTab);
+            tabs.Add(_highlightsTab);
+
             // REMATCH reloads SCN_GAME rather than resetting the models in place.
             // Everything a second game needs to forget — the scoreboard, the box
             // score, the episode director that stopped itself at the final whistle,
@@ -1568,8 +1760,10 @@ namespace PoFootball.Views
             // scene state, and rebuilding the scene clears all of it through the
             // same path PLAY already uses. Resetting each piece by hand would be a
             // second, less-travelled way to reach the same state.
+            // The QB challenge plays the QB challenge again.
             Button rematchButton = Systems_UiTheme.Button(
-                "REMATCH", Systems_UiTheme.Action, Systems_SceneRouter.LoadGame);
+                "REMATCH", Systems_UiTheme.Action,
+                () => Systems_SceneRouter.LoadGame(_variant));
             ApplyDockActionSize(rematchButton, PRIMARY_DOCK_WEIGHT);
 
             // The same destination as the status HUD's MENU chip above it, and now
@@ -1593,7 +1787,7 @@ namespace PoFootball.Views
             Button replayButton = Systems_UiTheme.Button(
                 "SAME GAME\nSEED " + seed,
                 Systems_UiTheme.SurfaceOverField,
-                () => Systems_SceneRouter.ReplayGame(seed));
+                () => Systems_SceneRouter.ReplayGame(seed, _variant));
             replayButton.name = "ReplaySeed";
             replayButton.style.color = Systems_UiTheme.TextPrimary;
             ApplyDockActionSize(replayButton, 1f);
@@ -1615,11 +1809,63 @@ namespace PoFootball.Views
             actions.Add(menuButton);
 
             sheet.Add(_finalHeadline);
+            sheet.Add(tabs);
             sheet.Add(_finalCardHost);
             sheet.Add(actions);
 
             overlay.Content.Add(sheet);
             return overlay;
+        }
+
+        private static Button FinalTab(string label, Action onClick)
+        {
+            Button tab = Systems_UiTheme.Tab(label, onClick);
+            tab.style.minHeight = FINAL_TAB_HEIGHT;
+            tab.style.height = FINAL_TAB_HEIGHT;
+            tab.style.fontSize = Systems_UiTheme.TEXT_CAPTION;
+            return tab;
+        }
+
+        /// <summary>
+        /// VISIBILITY, NOT DISPLAY, unlike the settings sheet's panes: the box
+        /// score is the pane that gives the host its height, so it has to stay in
+        /// layout while the scoring card is drawn over it.
+        /// </summary>
+        private void SelectFinalPane(bool scoring)
+        {
+            Systems_UiTheme.PaintTab(_boxScoreTab, !scoring);
+            Systems_UiTheme.PaintTab(_scoringTab, scoring);
+            Systems_UiTheme.PaintTab(_highlightsTab, false);
+
+            if (_boxScorePane != null)
+            {
+                _boxScorePane.style.visibility = scoring ? Visibility.Hidden : Visibility.Visible;
+            }
+
+            if (_scoringPane != null)
+            {
+                _scoringPane.style.visibility = scoring ? Visibility.Visible : Visibility.Hidden;
+            }
+        }
+
+        private void OnHighlightsTab()
+        {
+            _openHighlightsPublisher?.Publish(new Systems_OpenHighlightsMessage());
+        }
+
+        /// <summary>
+        /// The reel has chosen its highlights. Either order against the whistle is
+        /// fine: the count is kept, and the tab follows it whenever both are in.
+        /// </summary>
+        private void OnHighlightsReady(Systems_HighlightsReadyMessage message)
+        {
+            _highlightCount = message.Count;
+
+            if (_highlightsTab != null)
+            {
+                _highlightsTab.style.display =
+                    _highlightCount > 0 ? DisplayStyle.Flex : DisplayStyle.None;
+            }
         }
 
         /// <summary>
@@ -1661,6 +1907,147 @@ namespace PoFootball.Views
             RefreshCarrier();
             RefreshFocus();
             RefreshTransport();
+            RefreshHumanPointer();
+        }
+
+        /// <summary>
+        /// The QB challenge: re-reads the pointer's point on the field against this
+        /// frame's camera, and refreshes the play sheet.
+        /// </summary>
+        private void RefreshHumanPointer()
+        {
+            if (_playSheet == null)
+            {
+                return;
+            }
+
+            if (IsHumanPointer && _hasHumanPointer
+                && TryPanelToWorld(_humanPointerPanel, out Vector2 world))
+            {
+                _humanControl.SetPointer(world);
+            }
+
+            _playSheet.Refresh();
+            RefreshPointerMarks();
+        }
+
+        /// <summary>
+        /// The dot marks where the human sent things: the spot his pass will come
+        /// down on while it is in the air, else the spot his carrier is running
+        /// to. The ring sits under whoever a tap would hand or pitch the ball to.
+        /// </summary>
+        private void RefreshPointerMarks()
+        {
+            bool playing = IsHumanPointer && _humanControl.HumanOnOffense
+                && _play.Phase == Systems_PlayPhase.Live;
+
+            bool hasMark = false;
+            Vector2 markWorld = Vector2.zero;
+
+            if (playing && _ball != null && _ball.HasLandingSpot)
+            {
+                hasMark = true;
+                markWorld = _ball.LandingSpot;
+            }
+            else if (playing && _humanControl.HasMoveTarget)
+            {
+                hasMark = true;
+                markWorld = _humanControl.MoveTarget;
+            }
+
+            Vector2 markPanel = Vector2.zero;
+            float markUnits = 0f;
+            bool showDot = hasMark && TryWorldToPanel(markWorld, out markPanel, out markUnits);
+            _pointerDot.style.display = showDot ? DisplayStyle.Flex : DisplayStyle.None;
+
+            if (showDot)
+            {
+                Vector2 local = _pointerDot.parent.WorldToLocal(markPanel);
+                _pointerDot.style.left = local.x - (POINTER_DOT_UNITS / 2f);
+                _pointerDot.style.top = local.y - (POINTER_DOT_UNITS / 2f);
+            }
+
+            int hovered = playing ? _humanControl.HoveredSlot : -1;
+            Systems_IPlayerHandle mate = hovered >= 0 && _registry != null ? _registry.Get(hovered) : null;
+            Vector2 centre = Vector2.zero;
+            float unitsPerMetre = 0f;
+            bool showRing = mate != null && mate.Role != Systems_PlayerRole.OffensiveLine
+                && TryWorldToPanel(mate.Position, out centre, out unitsPerMetre);
+
+            _hoverRing.style.display = showRing ? DisplayStyle.Flex : DisplayStyle.None;
+
+            if (showRing)
+            {
+                Vector2 local = _hoverRing.parent.WorldToLocal(centre);
+                float diameter = HOVER_RING_METRES * unitsPerMetre;
+                _hoverRing.style.width = diameter;
+                _hoverRing.style.height = diameter;
+                _hoverRing.style.left = local.x - (diameter / 2f);
+                _hoverRing.style.top = local.y - (diameter / 2f);
+                Systems_UiTheme.SetRadius(_hoverRing, Mathf.RoundToInt(diameter / 2f));
+            }
+        }
+
+        /// <summary>
+        /// A point on the field to the panel, and how many panel units a metre is
+        /// there — TryPanelToWorld run backwards, through the same viewport.
+        /// </summary>
+        private bool TryWorldToPanel(Vector2 world, out Vector2 panel, out float unitsPerMetre)
+        {
+            Rect bounds = UnsafeRoot.worldBound;
+            panel = Vector2.zero;
+            unitsPerMetre = 0f;
+
+            if (_fieldCamera == null || bounds.width <= 0f || bounds.height <= 0f)
+            {
+                return false;
+            }
+
+            Vector3 viewport = _fieldCamera.WorldToViewportPoint(new Vector3(world.x, world.y, 0f));
+            panel = new Vector2(
+                bounds.xMin + (viewport.x * bounds.width),
+                bounds.yMin + ((1f - viewport.y) * bounds.height));
+            unitsPerMetre = bounds.height / (_fieldCamera.orthographicSize * 2f);
+            return true;
+        }
+
+        /// <summary>
+        /// The pointer left the field. The player keeps the command he last had
+        /// (Systems_HumanControlModel.ClearPointer) rather than chasing the spot
+        /// where the pointer was last seen.
+        /// </summary>
+        private void OnFieldPointerLeave(PointerLeaveEvent evt)
+        {
+            if (!IsHumanPointer)
+            {
+                return;
+            }
+
+            _hasHumanPointer = false;
+            _humanControl.ClearPointer();
+        }
+
+        /// <summary>A press or a move on the field, as the human quarterback's pointer.</summary>
+        private void HumanPointer(Vector2 panelPosition, bool pressed)
+        {
+            _humanPointerPanel = panelPosition;
+            _hasHumanPointer = true;
+
+            if (!TryPanelToWorld(panelPosition, out Vector2 world))
+            {
+                return;
+            }
+
+            if (pressed)
+            {
+                // A finger's clock, not the simulation's: the double-tap window
+                // must not shrink at 8x (Systems_HumanControlModel.Tap).
+                _humanControl.Tap(world, Time.unscaledTime);
+            }
+            else
+            {
+                _humanControl.SetPointer(world);
+            }
         }
 
         private void RefreshClock()
@@ -1803,6 +2190,8 @@ namespace PoFootball.Views
                 return;
             }
 
+            RecordScoring(message);
+
             // A KICKOFF AND A TRY BELONG TO NO DRIVE. Neither advances
             // Systems_GameModel.DriveIndex, so both were added to the drive of
             // whoever had the ball last: the opening kickoff read "DRIVE 1 play,
@@ -1857,6 +2246,107 @@ namespace PoFootball.Views
             RefreshSituation();
         }
 
+        /// <summary>
+        /// Keeps the SCORING tab's line score and summary. Points are counted from
+        /// the message, not read off the scoreboard, so the order in which the game
+        /// model and this handler see the down cannot put a touchdown's points on
+        /// the line before it. A try is folded into the touchdown it follows, the
+        /// way a broadcast summary prints "(kick good)": seven lines would be four
+        /// scores otherwise.
+        /// </summary>
+        private void RecordScoring(Systems_DownResolvedMessage message)
+        {
+            bool isTry = message.Kind.IsTry();
+
+            if (message.PointsScored <= 0 && !isTry)
+            {
+                return;
+            }
+
+            if (message.PointsScored > 0)
+            {
+                bool home = message.ScoringTeam == Systems_TeamId.Home;
+
+                if (home)
+                {
+                    _homeRunning += message.PointsScored;
+                }
+                else
+                {
+                    _awayRunning += message.PointsScored;
+                }
+
+                int period = _sawOvertime || _game.Phase == Systems_GamePhase.Overtime
+                    ? Systems_ScoringCard.PERIODS - 1
+                    : Mathf.Clamp(_game.Quarter, 1, Systems_GameRules.QUARTER_COUNT) - 1;
+
+                if (home)
+                {
+                    _homeByPeriod[period] += message.PointsScored;
+                }
+                else
+                {
+                    _awayByPeriod[period] += message.PointsScored;
+                }
+            }
+
+            bool foldIntoLast = isTry && message.Result != Systems_DownResult.DefensiveTry
+                && _scoringCount > 0;
+
+            if (foldIntoLast)
+            {
+                int last = _scoringCount - 1;
+                _scoring[last].What += TrySuffix(message.Result);
+                _scoring[last].HomeScore = _homeRunning;
+                _scoring[last].AwayScore = _awayRunning;
+                return;
+            }
+
+            if (message.PointsScored <= 0 || _scoringCount >= _scoring.Length)
+            {
+                return;
+            }
+
+            int quarter = _sawOvertime ? Systems_GameRules.QUARTER_COUNT + 1 : _game.Quarter;
+
+            _scoring[_scoringCount] = new Systems_ScoringCard.Entry
+            {
+                When = Systems_DisplayText.QuarterLabel(quarter) + " "
+                    + Systems_DisplayText.Clock(_game.SecondsRemaining),
+                Team = message.ScoringTeam,
+                What = ScoreTag(message) + "  " + Systems_DisplayText.PlayLabel(
+                    message.Kind, message.Call, message.Outcome)
+                    + "  " + Systems_DisplayText.YardageDetail(message.YardsGained + message.ReturnYards),
+                HomeScore = _homeRunning,
+                AwayScore = _awayRunning,
+            };
+
+            _scoringCount++;
+        }
+
+        private static string ScoreTag(Systems_DownResolvedMessage message)
+        {
+            switch (message.PointsScored)
+            {
+                case 6: return "TD";
+                case 3: return "FG";
+                case 2: return message.Kind.IsTry() ? "DEF 2PT" : "SAFETY";
+                default: return message.PointsScored + " PTS";
+            }
+        }
+
+        private static string TrySuffix(Systems_DownResult result)
+        {
+            switch (result)
+            {
+                case Systems_DownResult.ExtraPointGood: return " · XP";
+                case Systems_DownResult.ExtraPointMissed: return " · XP NO GOOD";
+                case Systems_DownResult.TwoPointGood: return " · 2PT";
+                case Systems_DownResult.TwoPointFailed: return " · 2PT NO GOOD";
+                default: return string.Empty;
+            }
+        }
+
         private static Color BannerColorFor(Systems_DownResolvedMessage message)
         {
             switch (message.Result)
@@ -1901,6 +2391,18 @@ namespace PoFootball.Views
                 ? "TIE GAME"
                 : $"{Systems_DisplayText.TeamName(message.Winner)} WINS";
 
+            // The QB challenge is scored on the human's own points, against his
+            // best: the margin is the computer's business.
+            if (_variant == Systems_GameVariant.QbChallenge)
+            {
+                int points = _game.ScoreOf(Systems_QbChallengeSystem.HUMAN_TEAM);
+                int previousBest = Systems_GameSettings.RecordQbChallengeScore(points);
+
+                _finalHeadline.text = points > previousBest
+                    ? $"YOU SCORED {points} · NEW BEST"
+                    : $"YOU SCORED {points} · BEST {previousBest}";
+            }
+
             // Frozen once, here, and used twice: the card on this overlay, and the
             // menu's LAST GAME card after the scene that owns the box score is gone.
             // Offered to the router now rather than by a button later, so MENU on
@@ -1909,7 +2411,17 @@ namespace PoFootball.Views
             Systems_SceneRouter.OfferSummary(summary);
 
             _finalCardHost.Clear();
-            _finalCardHost.Add(Systems_BoxScoreCard.Build("FINAL", summary));
+            _boxScorePane = Systems_BoxScoreCard.Build("FINAL", summary);
+            _finalCardHost.Add(_boxScorePane);
+
+            _scoringPane = Systems_ScoringCard.Build(
+                _scoring, _scoringCount, _homeByPeriod, _awayByPeriod, _sawOvertime);
+            _scoringPane.name = "ScoringPane";
+            Systems_UiTheme.FillParent(_scoringPane);
+            _finalCardHost.Add(_scoringPane);
+
+            SelectFinalPane(false);
+            OnHighlightsReady(new Systems_HighlightsReadyMessage(_highlightCount));
 
             _bannerOverlay.Hide();
 
