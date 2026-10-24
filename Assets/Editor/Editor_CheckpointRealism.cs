@@ -66,6 +66,39 @@ namespace PoFootball.EditorTools
         }
 
         /// <summary>
+        /// The same staging as <see cref="RunBatch"/>, in the Editor that is already
+        /// open: Tools/checkpoint_realism.py --in-editor calls it through the Unity
+        /// CLI's eval. A second, batch-mode Unity cannot open a project the Editor
+        /// holds — it exits 1 within two seconds (2026-10-24, every checkpoint of a
+        /// sweep) — so with the Editor open this is the only way in. Returns what
+        /// happened, for the caller to print.
+        /// </summary>
+        public static string RunInEditor(string source, string label)
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return "refused: leave play mode first";
+            }
+
+            if (!Directory.Exists(source))
+            {
+                return $"refused: no directory {source}";
+            }
+
+            if (!Stage(source))
+            {
+                return "refused: staging failed (see the Console)";
+            }
+
+            SessionState.SetString(Agent_BrainTable.EDITOR_OVERRIDE_SESSION_KEY, STAGING_TABLE);
+            SessionState.SetString(Editor_RealismEval.KEY_BRAIN_LABEL, label);
+
+            Debug.Log($"[PoFootball] Checkpoint realism: {label} staged from {source} (in the open Editor).");
+            Editor_RealismEval.RunUnattended();
+            return "started";
+        }
+
+        /// <summary>
         /// Copies every group's .onnx into the staging folder, imports them and writes
         /// the table. False, with the reason logged, if any group is missing.
         /// </summary>

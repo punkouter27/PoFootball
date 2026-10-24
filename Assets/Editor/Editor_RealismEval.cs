@@ -105,7 +105,18 @@ namespace PoFootball.EditorTools
             Begin(true);
         }
 
-        private static void Begin(bool batch)
+        /// <summary>
+        /// The Editor that is already open, driven by Tools/checkpoint_realism.py
+        /// --in-editor (through Editor_CheckpointRealism.RunInEditor): no save
+        /// prompt, because nobody is there to answer it, and the Editor stays open
+        /// when the four games are done.
+        /// </summary>
+        internal static void RunUnattended()
+        {
+            Begin(false, false);
+        }
+
+        private static void Begin(bool batch, bool askToSave = true)
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode)
             {
@@ -113,7 +124,7 @@ namespace PoFootball.EditorTools
                 return;
             }
 
-            if (!batch && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+            if (!batch && askToSave && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
                 return;
             }
