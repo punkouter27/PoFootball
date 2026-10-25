@@ -1,0 +1,1 @@
+{"hash":"83a97ad54fa35a10fa710fa0f1b57f927dcf30da","date":"2026-09-01T15:53:23-04:00","message":"publish.ps1: auto-bump versionCode, fail fast on open editor, -nographics, surface build errors","author":"punkouter26","added":[],"removed":[],"modified":{"Scripts/README.md":{"id":"Scripts/README.md","linesOfCode":13,"complexity":1,"language":"documentation","linksOut":[]}}}

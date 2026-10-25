@@ -189,7 +189,7 @@ namespace PoFootball.EditorTools
             string directory = SessionState.GetString(KEY_DIRECTORY, string.Empty);
             bool hasStopper = false;
 
-            Agent[] agents = UnityEngine.Object.FindObjectsByType<Agent>(FindObjectsSortMode.None);
+            Agent[] agents = UnityEngine.Object.FindObjectsByType<Agent>(FindObjectsInactive.Exclude);
 
             for (int agentIndex = 0; agentIndex < agents.Length; agentIndex++)
             {

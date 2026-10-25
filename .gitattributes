@@ -178,6 +178,9 @@ LightingData.asset     binary
 *.onnx                  lfs
 *.nn                    lfs
 
+# Aura's local project graph database is large and must use LFS.
+/.aura/*.db             lfs
+
 # Trainer configs are hand-edited YAML and must stay diffable.
 *.yaml                  text eol=lf
 *.yml                   text eol=lf

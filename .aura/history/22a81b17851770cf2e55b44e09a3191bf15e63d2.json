@@ -1,0 +1,1 @@
+{"hash":"22a81b17851770cf2e55b44e09a3191bf15e63d2","date":"2026-09-09T01:17:25-04:00","message":"Sweep seven training variants; adopt batch 512 and reject the control-cost term","author":"punkouter26","added":[],"removed":[],"modified":{"rl_optimization_log.md":{"id":"rl_optimization_log.md","linesOfCode":620,"complexity":1,"language":"documentation","linksOut":[]}}}
