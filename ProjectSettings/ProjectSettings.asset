@@ -179,7 +179,7 @@ PlayerSettings:
     iPhone: 0
     tvOS: 0
   overrideDefaultApplicationIdentifier: 1
-  AndroidBundleVersionCode: 10
+  AndroidBundleVersionCode: 11
   AndroidMinSdkVersion: 26
   AndroidTargetSdkVersion: 36
   AndroidPreferredInstallLocation: 1
@@ -731,7 +731,7 @@ PlayerSettings:
     Server: UNITY_MCP_READY;UNITY_MCP_DEPS_10
     Standalone: APP_UI_EDITOR_ONLY;SENTIS_ANALYTICS_ENABLED;UNITY_MCP_READY;UNITY_MCP_DEPS_10
     VisionOS: UNITY_MCP_READY;UNITY_MCP_DEPS_10
-    WebGL: UNITY_MCP_DEPS_10
+    WebGL: UNITY_MCP_READY;UNITY_MCP_DEPS_10
     Windows Store Apps: UNITY_MCP_READY;UNITY_MCP_DEPS_10
     XboxOne: UNITY_MCP_READY;UNITY_MCP_DEPS_10
     iPhone: UNITY_MCP_READY;UNITY_MCP_DEPS_10
