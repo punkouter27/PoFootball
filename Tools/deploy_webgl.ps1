@@ -22,15 +22,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 
-$az = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
-
 if (-not (Test-Path (Join-Path $BuildDir "index.html"))) {
     throw "No WebGL build at $BuildDir. Build it first: Tools > PoFootball > Build WebGL (browser)."
 }
 
 Copy-Item (Join-Path $PSScriptRoot "webgl\staticwebapp.config.json") $BuildDir -Force
 
-$token = & $az staticwebapp secrets list --name $AppName --resource-group $ResourceGroup `
+$token = az staticwebapp secrets list --name $AppName --resource-group $ResourceGroup `
     --query "properties.apiKey" -o tsv
 if (-not $token) {
     throw "No deployment token for $AppName in $ResourceGroup. Signed in? az account show"
@@ -42,6 +40,6 @@ if ($LASTEXITCODE -ne 0) {
     throw "swa deploy failed ($LASTEXITCODE)."
 }
 
-$hostName = & $az staticwebapp show --name $AppName --resource-group $ResourceGroup `
+$hostName = az staticwebapp show --name $AppName --resource-group $ResourceGroup `
     --query "defaultHostname" -o tsv
 "DEPLOYED: https://$hostName"
