@@ -331,9 +331,9 @@ namespace PoFootball.Views
         /// <summary>
         /// The broadcast graphics, one lit-or-quiet switch each, two to a row.
         ///
-        /// SWITCHES, NOT A LIST OF TOGGLES. Nine Toggle controls at TAP_TARGET each
+        /// SWITCHES, NOT A LIST OF TOGGLES. Ten Toggle controls at TAP_TARGET each
         /// would need a sheet three times this tall or a scroll view; a grid of
-        /// half-width segments fits all nine in the pane the other two tabs already
+        /// half-width segments fits all ten in the pane the other two tabs already
         /// use, keeps every target the full half-width of the sheet, and reads the
         /// way the seed pane's NEW GAME / SAME GAME pair already does: lit is on.
         ///
@@ -358,6 +358,8 @@ namespace PoFootball.Views
                 value => Systems_BroadcastSettings.SpaceControl = value));
             grid.Add(Switch("FATIGUE RINGS", () => Systems_BroadcastSettings.FatigueRings,
                 value => Systems_BroadcastSettings.FatigueRings = value));
+            grid.Add(Switch("PURSUIT + POCKET", () => Systems_BroadcastSettings.Pursuit,
+                value => Systems_BroadcastSettings.Pursuit = value));
             grid.Add(Switch("PLAY-BY-PLAY", () => Systems_BroadcastSettings.Commentary,
                 value => Systems_BroadcastSettings.Commentary = value));
             grid.Add(Switch("VOICE", () => Systems_BroadcastSettings.Speech,
@@ -393,7 +395,7 @@ namespace PoFootball.Views
                 write(!read());
                 StyleSegment(button, read());
 
-                // StyleSegment sets the seed pane's body size; nine switches need
+                // StyleSegment sets the seed pane's body size; ten switches need
                 // the smaller face to fit two to a row.
                 button.style.fontSize = Systems_UiTheme.TEXT_CAPTION + 2;
             });

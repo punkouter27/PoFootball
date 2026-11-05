@@ -1,0 +1,142 @@
+# PoFootball -- CONTRACT_REVISION 17. football_base25 RE-RUN FROM SCRATCH, with the drill.
+#
+# Pairs 1:1 with run-id `football_base26` (UNITY_RULES section 1).
+#
+# WHY A NEW RUN. football_base25 (this config's parent, Config/FootballBase25.yaml)
+# trained 2026-10-23..24, but its results/ folder is gone -- not on disk and not in
+# the Recycle Bin as of 2026-11-04 -- so there is nothing to resume, promote or
+# warm-start from. base24's checkpoints went the same way. EVERY BRAIN STARTS FRESH.
+#
+# THE DRILL IS BACK. base25 opened with RunFit and never graduated (DefenseCall
+# reward -0.20..-0.29 against a 0.25 bar) because it set a WARM offense from base24
+# against a FRESH defense. Here both sides start from nothing, so the drill is a
+# fair fight; it graduates to FullGame on the same bar as before.
+#
+# Launch (CUDA_VISIBLE_DEVICES=-1 is MANDATORY on this machine -- see CLAUDE.md).
+# REBUILD Builds/FootballEnv FIRST (Tools > PoFootball > Build Training Env).
+#   $env:CUDA_VISIBLE_DEVICES = "-1"
+#   mlagents-learn Config/FootballBase26.yaml --run-id=football_base26 `
+#     --env=Builds/FootballEnv/PoFootball.exe --no-graphics `
+#     --base-port=5400 --num-envs=4
+#   .venv\Scripts\python.exe Tools\watch_hacks.py --run football_base26 `
+#     --stop-trainer --trainer-pid <mlagents-learn PID>
+#
+# WHAT TO READ and AFTER IT FINISHES: as in FootballBase25.yaml's header.
+behaviors:
+  Offense: &football_brain
+    trainer_type: poca
+    init_path: null                 # FRESH: no earlier checkpoint survives
+
+    hyperparameters:
+      batch_size: 1024
+      buffer_size: 20480
+      learning_rate: 3.0e-4
+      beta: 5.0e-3
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 3
+      learning_rate_schedule: constant
+      beta_schedule: constant
+      epsilon_schedule: constant
+
+    network_settings:
+      normalize: false            # Sensor_FootballState emits [-1, 1] already;
+                                  # Systems_ContractTests asserts this stays off.
+      hidden_units: 256
+      num_layers: 2
+      vis_encode_type: simple
+
+    reward_signals:
+      extrinsic:
+        gamma: 0.99               # Reward_Role.TRAINER_GAMMA must match.
+        strength: 1.0
+
+    keep_checkpoints: 20
+    checkpoint_interval: 100000
+    max_steps: 16000000
+
+    # One whole play: (MAX_PHYSICS_TICKS 600 + PRESNAP_TICKS 20) / DECISION_PERIOD 5.
+    # Pinned by Systems_ContractTests.
+    time_horizon: 124
+
+    summary_freq: 50000
+    threaded: false               # deterministic ordering (UNITY_RULES section 2)
+
+  Defense:
+    <<: *football_brain
+    init_path: null                 # FRESH: no earlier checkpoint survives
+
+  Quarterback:
+    <<: *football_brain
+    init_path: null                 # FRESH: no earlier checkpoint survives
+    trainer_type: ppo
+    max_steps: 1600000
+    checkpoint_interval: 10000
+    hyperparameters:
+      batch_size: 256
+      buffer_size: 2048
+      learning_rate: 3.0e-4
+      beta: 5.0e-2
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 5
+      learning_rate_schedule: constant
+      beta_schedule: constant
+      epsilon_schedule: constant
+
+  DefenseCall:
+    <<: *football_brain
+    init_path: null                 # FRESH: no earlier checkpoint survives
+    trainer_type: ppo
+    max_steps: 40000
+    checkpoint_interval: 1000
+    summary_freq: 1000
+    time_horizon: 8                 # every episode is one step
+    hyperparameters:
+      batch_size: 64
+      buffer_size: 640
+      learning_rate: 3.0e-4
+      beta: 5.0e-2
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 5
+      learning_rate_schedule: constant
+      beta_schedule: constant
+      epsilon_schedule: constant
+    network_settings:
+      normalize: false
+      hidden_units: 64
+      num_layers: 2
+      vis_encode_type: simple
+
+environment_parameters:
+  spot_lesson:
+    curriculum:
+      - name: RunFit
+        completion_criteria:
+          measure: reward
+          behavior: DefenseCall
+          signal_smoothing: true
+          min_lesson_length: 1000
+          threshold: 0.25
+        value: 3.0
+      - name: FullGame
+        value: 2.0
+
+env_settings:
+  # --env, --num-envs and --base-port go on the command line (see the header).
+  # Record --num-envs in the run's MANIFEST.md; promote_brain.py does it for you.
+  seed: 1
+
+engine_settings:
+  time_scale: 20                  # physics stays at dt=0.02; this only speeds the clock
+  quality_level: 0
+  target_frame_rate: -1
+  capture_frame_rate: 60
+
+torch_settings:
+  device: cpu                     # Not sufficient alone: launch with
+                                  # CUDA_VISIBLE_DEVICES=-1 (see CLAUDE.md).
+
+checkpoint_settings:
+  results_dir: results

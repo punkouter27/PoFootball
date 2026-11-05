@@ -162,7 +162,7 @@ namespace PoFootball.Rewards
         public const float INTERCEPT_HORIZON_SECONDS = 8f;
 
         /// <summary>
-        /// The extrinsic gamma of every behavior in Config/FootballBase24.yaml (and
+        /// The extrinsic gamma of every behavior in Config/FootballBase26.yaml (and
         /// every config since base11). Potential-based shaping is only
         /// policy-invariant with the trainer's own discount, so if a config ever
         /// changes gamma this must change with it.
@@ -194,59 +194,15 @@ namespace PoFootball.Rewards
         /// fall pays for the angle.
         ///
         /// Closed form: with d = target - pursuer, (v.v - s^2) t^2 + 2 (d.v) t +
-        /// d.d = 0, smallest non-negative root. Pure, allocation-free, Models only.
+        /// d.d = 0, smallest non-negative root. Computed by Systems_InterceptMath,
+        /// which Systems_PursuitView reads too, so the cones show what is paid.
         /// </summary>
         public static float InterceptSeconds(
             Vector2 pursuerPosition, float pursuerSpeed,
             Vector2 targetPosition, Vector2 targetVelocity)
         {
-            Vector2 offset = targetPosition - pursuerPosition;
-            float c = Vector2.Dot(offset, offset);
-
-            if (c < 1e-6f)
-            {
-                return 0f;
-            }
-
-            if (pursuerSpeed <= 1e-3f)
-            {
-                return float.PositiveInfinity;
-            }
-
-            float a = Vector2.Dot(targetVelocity, targetVelocity) - (pursuerSpeed * pursuerSpeed);
-            float b = 2f * Vector2.Dot(offset, targetVelocity);
-
-            // Equal speeds: the quadratic is linear, and only a target coming
-            // toward the pursuer (b < 0) can be met.
-            if (Mathf.Abs(a) < 1e-5f)
-            {
-                return b < 0f ? -c / b : float.PositiveInfinity;
-            }
-
-            float discriminant = (b * b) - (4f * a * c);
-
-            if (discriminant < 0f)
-            {
-                return float.PositiveInfinity;
-            }
-
-            float root = Mathf.Sqrt(discriminant);
-            float first = (-b - root) / (2f * a);
-            float second = (-b + root) / (2f * a);
-
-            float earliest = float.PositiveInfinity;
-
-            if (first >= 0f)
-            {
-                earliest = first;
-            }
-
-            if (second >= 0f && second < earliest)
-            {
-                earliest = second;
-            }
-
-            return earliest;
+            return Systems_InterceptMath.InterceptSeconds(
+                pursuerPosition, pursuerSpeed, targetPosition, targetVelocity);
         }
 
         /// <summary>

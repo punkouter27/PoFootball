@@ -98,8 +98,9 @@ namespace PoFootball.Views
     ///
     /// AND IN THE IMPACT PASS (2026-10-22), STILL UNDER THAT TEST:
     ///
-    ///   THE TACKLE IS THREE LAYERS, EACH ONE A NUMBER. The pop is the closing
-    ///   speed, as it always was. Under it a thud weighted by the tackler's
+    ///   THE TACKLE IS THREE LAYERS, EACH ONE A NUMBER. The pop's pitch is the
+    ///   closing speed, as it always was; since 2026-11-04 its LOUDNESS is the
+    ///   collision's reduced-mass energy, both bodies (CollisionLoudness). Under it a thud weighted by the tackler's
     ///   mass — the one thing the pitch alone could only hint at — and over it a
     ///   pad crack that plays only at the fumble threshold, so the hits that can
     ///   strip the ball are the ones you hear crack. Two more voices in the pool,
@@ -293,6 +294,20 @@ namespace PoFootball.Views
 
         private static readonly float HeaviestMass =
             Systems_RoleTable.MassOf(Systems_PlayerRole.DefensiveLine);
+
+        /// <summary>
+        /// The quietest and loudest tackle by ENERGY, not speed: the reduced-mass
+        /// kinetic energy mu v^2 (the half cancels in the ratio) of two corners
+        /// meeting at the tackle floor, and of two linemen at the hardest closing
+        /// speed there is. See CollisionLoudness.
+        /// </summary>
+        private static readonly float SoftestHitEnergy =
+            ReducedMass(LightestMass, LightestMass)
+            * Systems_SimConstants.TACKLE_CLOSING_SPEED * Systems_SimConstants.TACKLE_CLOSING_SPEED;
+
+        private static readonly float HardestHitEnergy =
+            ReducedMass(HeaviestMass, HeaviestMass)
+            * Systems_SimConstants.MAX_BODY_SPEED * Systems_SimConstants.MAX_BODY_SPEED;
 
         [Header("Optional overrides")]
         [Tooltip("Leave empty to use the synthesised fallback in Systems_ToneBank.")]
@@ -838,13 +853,18 @@ namespace PoFootball.Views
             float pitch = (0.94f + (0.12f * force))
                 * Mathf.Lerp(1f + TACKLER_MASS_PITCH, 1f - TACKLER_MASS_PITCH, heaviness);
 
-            PlayAt(_impact, 0.45f + (0.55f * force), pitch, at);
+            // LOUDNESS IS THE COLLISION'S ENERGY, BOTH BODIES. Closing speed alone
+            // made a corner meeting a corner at 6 m/s as loud as a lineman landing
+            // on a back at 6 m/s; the energy the two exchange is not the same.
+            float loudness = CollisionLoudness(message.TacklerId, message.CarrierId, message.ClosingSpeed);
 
-            // The body under it: mass AND speed, because a lineman who barely
-            // touched the carrier did not land on him. A floor of a quarter so
-            // the lightest tackler still has some low end.
+            PlayAt(_impact, 0.45f + (0.55f * loudness), pitch, at);
+
+            // The body under it: the tackler's mass AND the hit's energy, because a
+            // lineman who barely touched the carrier did not land on him. A floor
+            // of a quarter so the lightest tackler still has some low end.
             PlayAt(
-                _thud, THUD_VOLUME * (0.25f + (0.75f * heaviness)) * (0.4f + (0.6f * force)),
+                _thud, THUD_VOLUME * (0.25f + (0.75f * heaviness)) * (0.4f + (0.6f * loudness)),
                 1f, at);
 
             if (message.ClosingSpeed >= Systems_SimConstants.FUMBLE_CLOSING_SPEED)
@@ -879,6 +899,39 @@ namespace PoFootball.Views
 
             return Mathf.InverseLerp(
                 LightestMass, HeaviestMass, Systems_RoleTable.MassOf(tackler.Role));
+        }
+
+        /// <summary>
+        /// The hit's energy in [0, 1], perceptually: sqrt of where mu v^2 sits
+        /// between the softest and the hardest tackle, mu = m1 m2 / (m1 + m2) the
+        /// reduced mass of tackler and carrier. The square root because loudness
+        /// follows amplitude, and amplitude goes with the square root of energy —
+        /// linear in energy, every ordinary tackle was a whisper beside the one
+        /// lineman-on-lineman collision a game might have. Masses by role, as
+        /// TacklerHeaviness reads them; an unresolved body counts as the median.
+        /// </summary>
+        private float CollisionLoudness(int tacklerId, int carrierId, float closingSpeed)
+        {
+            float tacklerMass = MassOrMedian(tacklerId);
+            float carrierMass = MassOrMedian(carrierId);
+            float energy = ReducedMass(tacklerMass, carrierMass) * closingSpeed * closingSpeed;
+
+            return Mathf.Sqrt(Mathf.InverseLerp(SoftestHitEnergy, HardestHitEnergy, energy));
+        }
+
+        private float MassOrMedian(int playerId)
+        {
+            Systems_IPlayerHandle player = _registry == null ? null : _registry.FindById(playerId);
+
+            return player == null
+                ? 0.5f * (LightestMass + HeaviestMass)
+                : Systems_RoleTable.MassOf(player.Role);
+        }
+
+        private static float ReducedMass(float first, float second)
+        {
+            float total = first + second;
+            return total <= 0f ? 0f : first * second / total;
         }
 
         /// <summary>

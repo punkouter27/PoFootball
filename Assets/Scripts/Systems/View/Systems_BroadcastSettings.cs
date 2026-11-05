@@ -31,6 +31,7 @@ namespace PoFootball.Views
         private const string HAPTICS_KEY = "PoFootball.Broadcast.Haptics";
         private const string AUTO_DIRECTOR_KEY = "PoFootball.Broadcast.AutoDirector";
         private const string FATIGUE_RINGS_KEY = "PoFootball.Broadcast.FatigueRings";
+        private const string PURSUIT_KEY = "PoFootball.Broadcast.Pursuit";
 
         private static bool _loaded;
         private static bool _spaceControl;
@@ -42,6 +43,7 @@ namespace PoFootball.Views
         private static bool _haptics;
         private static bool _autoDirector;
         private static bool _fatigueRings;
+        private static bool _pursuit;
 
         /// <summary>The time-to-reach heatmap on the turf and the separation tags.</summary>
         public static bool SpaceControl
@@ -104,6 +106,13 @@ namespace PoFootball.Views
             set { Load(); _fatigueRings = value; Save(FATIGUE_RINGS_KEY, value); }
         }
 
+        /// <summary>The pursuit cones to the carrier and the quarterback's pocket clock (Systems_PursuitView).</summary>
+        public static bool Pursuit
+        {
+            get { Load(); return _pursuit; }
+            set { Load(); _pursuit = value; Save(PURSUIT_KEY, value); }
+        }
+
         /// <summary>A vibration on a big hit, Android only.</summary>
         public static bool Haptics
         {
@@ -141,6 +150,7 @@ namespace PoFootball.Views
             _haptics = PlayerPrefs.GetInt(HAPTICS_KEY, 1) != 0;
             _autoDirector = PlayerPrefs.GetInt(AUTO_DIRECTOR_KEY, 1) != 0;
             _fatigueRings = PlayerPrefs.GetInt(FATIGUE_RINGS_KEY, 1) != 0;
+            _pursuit = PlayerPrefs.GetInt(PURSUIT_KEY, 1) != 0;
         }
 
         /// <summary>See Systems_GameSettings.ResetState.</summary>

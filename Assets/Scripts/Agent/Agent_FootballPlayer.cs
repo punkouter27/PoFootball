@@ -231,6 +231,9 @@ namespace PoFootball.Agents
         /// </summary>
         private Vector2 _commandFrameUp = Vector2.up;
 
+        /// <summary>The live command in world m/s, for presentation; zero outside a live play.</summary>
+        private Vector2 _commandedVelocity;
+
         /// <summary>A decision arrived and its first tick has not been applied yet.</summary>
         private bool _isFreshCommand;
 
@@ -363,6 +366,9 @@ namespace PoFootball.Agents
         public float Fatigue => _fatigue;
 
         public bool IsCarrier => _isCarrier;
+
+        /// <summary>See Systems_IPlayerHandle.CommandedVelocity. Written each live tick in OnActionReceived.</summary>
+        public Vector2 CommandedVelocity => _commandedVelocity;
 
         private Systems_FormationSelection _formations;
 
@@ -848,6 +854,8 @@ namespace PoFootball.Agents
                 return;
             }
 
+            _commandedVelocity = Vector2.zero;
+
             // BEFORE THE SNAP NOTHING MOVES (revision 14) — the bodies are set, and
             // the only decision anybody can make is the quarterback's kick-or-go. The
             // front is the coordinator's (Agent_DefensiveCoordinator).
@@ -883,6 +891,7 @@ namespace PoFootball.Agents
                 out float drive, out float steer);
 
             AccumulateCommandJerk(command);
+            _commandedVelocity = CommandInWorld(command);
 
             float fatigueScale = 1f - (_fatigue * Systems_SimConstants.FATIGUE_MAX_PENALTY);
             float driveForce = drive * _driveForce * fatigueScale;
@@ -1660,10 +1669,32 @@ namespace PoFootball.Agents
             _rigidbody.rotation = rotation;
             _rigidbody.linearVelocity = Vector2.zero;
             _rigidbody.angularVelocity = 0f;
+            _commandedVelocity = Vector2.zero;
+        }
+
+        /// <summary>
+        /// The command as the velocity it asks for in world space: the decision's
+        /// frame, |command| capped at 1, times top speed, zero inside the deadzone
+        /// — Agent_VelocityController.Resolve's reading of it, before the backpedal
+        /// cap. Presentation only.
+        /// </summary>
+        private Vector2 CommandInWorld(Vector2 command)
+        {
+            float length = command.magnitude;
+
+            if (length < Systems_SimConstants.VELOCITY_COMMAND_DEADZONE)
+            {
+                return Vector2.zero;
+            }
+
+            Vector2 frameLeft = new Vector2(-_commandFrameUp.y, _commandFrameUp.x);
+            Vector2 direction = ((_commandFrameUp * command.x) + (frameLeft * command.y)) / length;
+            return direction * (Mathf.Min(length, 1f) * _topSpeed);
         }
 
         public void Freeze()
         {
+            _commandedVelocity = Vector2.zero;
             _rigidbody.linearVelocity = Vector2.zero;
             _rigidbody.angularVelocity = 0f;
         }

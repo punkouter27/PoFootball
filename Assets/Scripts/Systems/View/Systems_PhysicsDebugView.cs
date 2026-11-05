@@ -14,6 +14,10 @@ namespace PoFootball.Views
     ///               thicker on the carrier
     ///     arrow     velocity, a quarter of a second ahead (so its length is
     ///               where the body will be at that speed), yellow
+    ///     thin      the velocity the controller is ASKED for (revision 17's
+    ///               command, Systems_IPlayerHandle.CommandedVelocity), same scale,
+    ///               cyan. Yellow short of cyan is a body that cannot keep up;
+    ///               no cyan at all on a defender is a brain asking for nothing.
     ///     tick      facing, the vector the officials judge "from behind" by
     ///     red arc   fatigue, clockwise from the facing tick, a full ring at 1
     ///     orange    the ball's velocity, while it moves
@@ -61,6 +65,10 @@ namespace PoFootball.Views
         private static readonly Color32 OffenseColor = new Color32(90, 215, 255, 230);
         private static readonly Color32 DefenseColor = new Color32(255, 115, 190, 230);
         private static readonly Color32 VelocityColor = new Color32(255, 225, 60, 240);
+        private static readonly Color32 CommandColor = new Color32(60, 235, 235, 220);
+
+        /// <summary>The command arrow is drawn thinner than the velocity it is compared with, so both read where they overlap.</summary>
+        private const float COMMAND_WIDTH_SCALE = 0.45f;
         private static readonly Color32 FacingColor = new Color32(255, 255, 255, 220);
         private static readonly Color32 FatigueColor = new Color32(235, 60, 70, 240);
         private static readonly Color32 BallColor = new Color32(255, 150, 40, 255);
@@ -227,9 +235,16 @@ namespace PoFootball.Views
             {
                 AppendArrow(centre, velocity * VELOCITY_LOOKAHEAD, VelocityColor);
             }
+
+            Vector2 command = handle.CommandedVelocity;
+
+            if (command.sqrMagnitude > MIN_SPEED_TO_DRAW * MIN_SPEED_TO_DRAW)
+            {
+                AppendArrow(centre, command * VELOCITY_LOOKAHEAD, CommandColor, COMMAND_WIDTH_SCALE);
+            }
         }
 
-        private void AppendArrow(Vector2 from, Vector2 span, Color32 color)
+        private void AppendArrow(Vector2 from, Vector2 span, Color32 color, float widthScale = 1f)
         {
             float length = span.magnitude;
 
@@ -242,9 +257,9 @@ namespace PoFootball.Views
             float head = Mathf.Min(HEAD_LENGTH, length * 0.5f);
             Vector2 headBase = from + (direction * (length - head));
 
-            AppendQuad(from, headBase, ARROW_WIDTH, color);
+            AppendQuad(from, headBase, ARROW_WIDTH * widthScale, color);
 
-            Vector2 flank = new Vector2(-direction.y, direction.x) * (HEAD_WIDTH * 0.5f);
+            Vector2 flank = new Vector2(-direction.y, direction.x) * (HEAD_WIDTH * 0.5f * widthScale);
             int baseIndex = _vertices.Count;
 
             _vertices.Add(headBase - flank);

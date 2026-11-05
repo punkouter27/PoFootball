@@ -135,6 +135,13 @@ namespace PoFootball.Views
             {
                 gameScope.Container.Inject(statusHud);
 
+                // The pursuit cones and pocket clock: a spectator view, so every
+                // build has it, and built here for the same reason as the HUD —
+                // it is runtime-constructed, not authored in SCN_GAME. It gates
+                // itself on the presentation budget and its broadcast switch.
+                Systems_PursuitView pursuit = host.AddComponent<Systems_PursuitView>();
+                gameScope.Container.Inject(pursuit);
+
                 // The DEBUG sheet's PHYSICS view: a debug build's instrument, so
                 // a retail build never constructs it, and a game scene's only —
                 // the menu has no bodies to outline.

@@ -57,6 +57,19 @@ namespace PoFootball.Systems
         bool IsCarrier { get; }
 
         /// <summary>
+        /// The velocity this body's controller is currently being ASKED for, in
+        /// world metres per second: the policy's (or heuristic's) revision 17
+        /// command, resolved out of the frame it was decided in, at |command| x top
+        /// speed. Zero outside a live play. Presentation only —
+        /// Systems_PhysicsDebugView draws it beside the actual velocity, so a body
+        /// that is asked to sprint and does not, or a defender whose brain asks for
+        /// nothing, is visible at a glance. Nothing in the systems layer reads it.
+        ///
+        /// A default member so a test stub that has no controller need not say so.
+        /// </summary>
+        Vector2 CommandedVelocity => Vector2.zero;
+
+        /// <summary>
         /// The huddle: keeps Systems_SimConstants.FATIGUE_CARRIED_BETWEEN_PLAYS of
         /// the fatigue this player finished the last play with. Still called BEFORE
         /// ResetTo restores the body, per CLAUDE.md section 2.
