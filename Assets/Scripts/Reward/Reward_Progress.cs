@@ -59,5 +59,42 @@ namespace PoFootball.Rewards
             return ballState == Systems_BallState.Held
                 || ballState == Systems_BallState.Incomplete;
         }
+
+        /// <summary>
+        /// Whether the caller should HOLD its baseline at the snap instead of paying
+        /// this tick: a scrimmage down, the ball still with the side that snapped it,
+        /// no forward pass yet, inside the throw window, and the ball at or behind
+        /// the line of scrimmage.
+        ///
+        /// THE DROPBACK WAS CHARGED BY THE YARD (football_base26). Paid per tick, a
+        /// quarterback retreating seven yards to throw lost 7 x YARD_REWARD_SCALE
+        /// before the call even latched (DROPBACK_TICKS), and early in a run, when no
+        /// pass is completed, nothing ever paid it back. The policy learned to run
+        /// forward from the snap, crossed the line, and so made every pass illegal
+        /// (Agent_ActionLegality.CanReleasePass): 8.1M steps, Pass/AttemptRate
+        /// 0.25-0.44 with ~2% completed and NO incompletions, interceptions or sacks
+        /// — the ball was simply never thrown, and four realism games had one
+        /// completion between them.
+        ///
+        /// Holding the baseline changes no total: the shaping still telescopes, so a
+        /// catch, or a scramble past the line, is paid from the snap spot the moment
+        /// it happens, and a play that ends in the backfield is priced by the
+        /// terminal reward's tackle-for-loss, as a sack always was. What it removes is
+        /// the per-tick penalty on the movement every pass needs.
+        /// </summary>
+        public static bool HoldsBaselineInBackfield(
+            bool isScrimmage,
+            bool possessionChanged,
+            bool forwardPassThrown,
+            int physicsTick,
+            float ballY,
+            float lineOfScrimmageY)
+        {
+            return isScrimmage
+                && !possessionChanged
+                && !forwardPassThrown
+                && physicsTick <= Systems_SimConstants.THROW_WINDOW_TICKS
+                && ballY <= lineOfScrimmageY;
+        }
     }
 }

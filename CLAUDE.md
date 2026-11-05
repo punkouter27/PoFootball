@@ -108,7 +108,14 @@ and leftward in the body's frame, at |command| × top speed), driven by
 `Agent_VelocityController`; `Agent_ActionContract` has the detail and
 [docs/CONTRACT_HISTORY.md](docs/CONTRACT_HISTORY.md) has every revision before it.
 
-- **`Config/FootballBase26.yaml` is the config to run** (run-id `football_base26`):
+- **`Config/FootballBase27.yaml` is the config to run** (run-id `football_base27`,
+  training 2026-11-05): every brain warm-started from base26's final checkpoint,
+  FullGame only, with the dropback no longer charged tick by tick
+  (`Reward_Progress.HoldsBaselineInBackfield`). base26's quarterback ran forward
+  from every snap to dodge that charge, crossed the line, and so never threw.
+  Its end-of-run realism check needs `--realism-in-editor` in
+  `Tools/run_unattended.py`: the batch-mode check stalls on the first play.
+- `Config/FootballBase26.yaml` (run-id `football_base26`, trained 2026-11-04/05):
   all four brains FRESH, opening with the run-fit drill (`spot_lesson` 3) and
   graduating to FullGame at a DefenseCall reward of 0.25 over 1000+ plays.
   `football_base25` trained 2026-10-23/24 against the same contract, but its

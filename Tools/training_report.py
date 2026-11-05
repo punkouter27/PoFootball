@@ -38,6 +38,7 @@ RESUME_STUB_STEPS = 25_000
 # A tenth of the quarterback's 700k budget. Below it, a healthy-looking play mix is
 # mostly the starting randomness, so its ratings are capped.
 QB_NOVICE_STEPS = 70_000
+NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four"}
 LEVELS = ["Not yet", "Beginner", "Developing", "Good", "Football-like"]
 OFFENSE_ROLES = ["OffensiveLine", "Fullback", "RunningBack", "TightEnd", "WideReceiver"]
 DEFENSE_ROLES = ["DefensiveLine", "Linebacker", "Cornerback", "Safety"]
@@ -51,10 +52,11 @@ ROLE_NAMES = {
 DRIVE_NOISE_FLOOR = 0.26
 
 
-def load(run):
-    """tag -> [(step, value)] for the run. Play/Call/Control stats are global and
-    written under every behavior, so the Offense file is as good as any."""
-    files = sorted(glob.glob(f"results/{run}/Offense/events.out.tfevents.*"))
+def load(run, brain="Offense"):
+    """tag -> [(step, value)] for one brain of the run. Play/Call/Control stats are
+    global and written under every behavior, so the Offense file is as good as any
+    for those; losses, entropy and reward are per brain."""
+    files = sorted(glob.glob(f"results/{run}/{brain}/events.out.tfevents.*"))
     data = {}
     for path in files:
         acc = EventAccumulator(path, size_guidance={"scalars": 0})
@@ -133,6 +135,7 @@ def abilities(data, steps):
     interception = recent(data, "Pass/InterceptionPerAttempt")
     pass_share = recent(data, "Call/Pass")
     lesson = recent(data, "Environment/Lesson Number/spot_lesson", 1) or 0
+    full_game = len(LESSON_NAMES) - 1  # the last lesson is the one with fourth downs
 
     def drive(roles):
         values = [recent(data, f"Control/Drive/{role}") for role in roles]
@@ -195,10 +198,10 @@ def abilities(data, steps):
              level=completion_level,
              note="Too easy: the defense is not contesting throws yet." if completion and completion > 0.9 else ""),
         dict(name="Kicking decisions",
-             value="locked" if lesson < 2 else f"{pct(kicks)} of calls",
+             value="locked" if lesson < full_game else f"{pct(kicks)} of calls",
              target="punts and field goals on 4th down",
-             level=0 if lesson < 2 else (min(kick_level, 1) if early else kick_level),
-             note="Not taught yet. Fourth downs arrive in the third lesson." if lesson < 2 else
+             level=0 if lesson < full_game else (min(kick_level, 1) if early else kick_level),
+             note="Not taught yet. Fourth downs arrive in the last lesson." if lesson < full_game else
              "It does kick, but it has barely met fourth down, so this is trial and error." if early else ""),
         drive_cell(["Quarterback"]),
     ]
@@ -257,7 +260,7 @@ W, H = 760, 330
 LEFT, RIGHT, TOP, BOTTOM = 56, 170, 28, 44
 
 
-def chart(chart_id, series, x_max, y_min, y_max, y_fmt, band=None, notes=(), lessons=()):
+def chart(chart_id, series, x_max, y_min, y_max, y_fmt, band=None, notes=(), lessons=(), kind="pct"):
     """series: [(name, css_var, [(step, value)], dashed)]. Returns svg + json."""
     plot_w, plot_h = W - LEFT - RIGHT, H - TOP - BOTTOM
 
@@ -343,7 +346,7 @@ def chart(chart_id, series, x_max, y_min, y_max, y_fmt, band=None, notes=(), les
     parts.append(f'<rect class="hit" x="{LEFT}" y="{TOP}" width="{plot_w}" height="{plot_h}"/>')
     parts.append("</svg>")
 
-    meta = dict(id=chart_id, left=LEFT, plotW=plot_w, xMax=x_max, width=W, series=payload)
+    meta = dict(id=chart_id, left=LEFT, plotW=plot_w, xMax=x_max, width=W, series=payload, kind=kind)
     return "".join(parts), meta
 
 
@@ -384,15 +387,197 @@ def table(series, y_fmt):
     return "<details><summary>Show the numbers</summary><table class='data'>" + "".join(rows) + "</table></details>"
 
 
+# --- per-brain learning curves (added 2026-11-04) -----------------------------
+
+BRAIN_BLURBS = {
+    "Offense": "10 players sharing one brain: linemen, backs and receivers.",
+    "Defense": "11 players sharing one brain: line, linebackers and secondary. "
+               "The brain this project most needs: every earlier run's defense stayed passive.",
+    "Quarterback": "1 player, its own brain: the play call, the throw, the scramble.",
+    "DefenseCall": "The defense's play-caller: no body, one decision a play — which front to line up in. "
+                   "Paid exactly what the defense earns on the play, so its reward is the defense's result.",
+}
+BRAIN_ORDER = ("Defense", "DefenseCall", "Offense", "Quarterback")
+
+
+def moving_average(points, window=5):
+    """Trailing mean: a loss reading jumps around, its trend is what to read."""
+    out = []
+    for index in range(len(points)):
+        chunk = points[max(0, index - window + 1):index + 1]
+        out.append((points[index][0], sum(v for _, v in chunk) / len(chunk)))
+    return out
+
+
+def auto_range(series, pad=0.1, floor=None):
+    values = [v for _, _, points, _ in series for _, v in points]
+    if not values:
+        return 0.0, 1.0
+    low, high = min(values), max(values)
+    if high - low < 1e-6:
+        low, high = low - 0.5, high + 0.5
+    span = high - low
+    low, high = low - span * pad, high + span * pad
+    if floor is not None:
+        low = max(low, floor)
+    return low, high
+
+
+def trend_words(points, higher_is_better=True, unit=""):
+    """'rose from A to B' over the first and last fifth of the readings."""
+    if len(points) < 4:
+        return "too few readings yet to call a trend"
+    fifth = max(1, len(points) // 5)
+    start = sum(v for _, v in points[:fifth]) / fifth
+    end = sum(v for _, v in points[-fifth:]) / fifth
+    span = max(abs(start), abs(end), 1e-6)
+    if abs(end - start) / span < 0.05:
+        return f"held steady around {end:.3g}{unit}"
+    rose = end > start
+    good = rose == higher_is_better
+    return (f"{'rose' if rose else 'fell'} from {start:.3g}{unit} to {end:.3g}{unit}"
+            f" — {'better' if good else 'worse'}")
+
+
+def brain_cards(run, lessons):
+    """One card per brain: reward (open), losses and exploration (folded)."""
+    cards = []
+    num = lambda value: f"{value:.3g}"
+    for brain in BRAIN_ORDER:
+        data = load(run, brain)
+        reward = data.get("Environment/Cumulative Reward", [])
+        if not reward:
+            cards.append(dict(brain=brain, empty=True))
+            continue
+        x_max = max(10_000, int(reward[-1][0] * 1.1))
+        group = data.get("Environment/Group Cumulative Reward", [])
+
+        series = [("Reward per player", "--s1", reward, False)]
+        if group:
+            series.append(("Team reward", "--s2", group, True))
+        low, high = auto_range(series)
+        band = (0.25, max(0.5, high), "drill graduates at 0.25") if brain == "DefenseCall" else None
+        svg, meta = chart(f"reward_{brain}", series, x_max, low, high, num, band=band,
+                          lessons=lessons, kind="num")
+        reward_card = dict(svg=svg, meta=meta, trend=trend_words(reward))
+
+        losses = [(name, color, moving_average(data[tag]), False)
+                  for name, color, tag in (("Value loss", "--s1", "Losses/Value Loss"),
+                                           ("Baseline loss", "--s2", "Losses/Baseline Loss"))
+                  if data.get(tag)]
+        loss_card = None
+        if losses:
+            low, high = auto_range(losses, floor=0.0)
+            svg, meta = chart(f"loss_{brain}", losses, x_max, low, high, num, lessons=lessons, kind="num")
+            loss_card = dict(svg=svg, meta=meta, trend=trend_words(data["Losses/Value Loss"], False)
+                             if data.get("Losses/Value Loss") else "")
+
+        entropy = data.get("Policy/Entropy", [])
+        entropy_card = None
+        if entropy:
+            ent = [("Exploration (entropy)", "--s3", entropy, False)]
+            low, high = auto_range(ent)
+            svg, meta = chart(f"entropy_{brain}", ent, x_max, low, high, num, lessons=lessons, kind="num")
+            entropy_card = dict(svg=svg, meta=meta, trend=trend_words(entropy, False))
+
+        policy_loss = data.get("Losses/Policy Loss", [])
+        cards.append(dict(brain=brain, empty=False, steps=reward[-1][0], reward=reward_card,
+                          loss=loss_card, entropy=entropy_card,
+                          policy_loss=policy_loss[-1][1] if policy_loss else None,
+                          last_reward=recent(data, "Environment/Cumulative Reward")))
+    return cards
+
+
+def defense_card(data, x_max, lessons, run):
+    """How the defense is doing, read off the play mix and its own play-caller's reward."""
+    caller = load(run, "DefenseCall").get("Environment/Cumulative Reward", [])
+    plays = [("Plays ending in a tackle", "--s2", data.get("Play/TackleRate", []), False),
+             ("Sacks", "--s1", data.get("Play/SackRate", []), False),
+             ("Touchdowns against", "--s3", data.get("Play/TouchdownRate", []), False),
+             ("Pursuit pay as share of all pay", "--ref", data.get("Reward/Defense/ShapingShare", []), True)]
+    as_pct = lambda value: f"{value * 100:.0f}%"
+    svg, meta = chart("defense", plays, x_max, 0, 1, as_pct, lessons=lessons)
+    tackle, sacks, touchdowns, share = (recent(data, tag) for tag in (
+        "Play/TackleRate", "Play/SackRate", "Play/TouchdownRate", "Reward/Defense/ShapingShare"))
+    caller_now = recent({"r": caller}, "r")
+    now = (f"The defense ends {as_pct(tackle or 0)} of plays with a tackle, has sacked the quarterback on "
+           f"{(sacks or 0) * 100:.1f}% of plays and given up a touchdown on {as_pct(touchdowns or 0)}."
+           + (f" Its play-caller's reward — the defense's result per play — is {caller_now:+.2f}." if caller_now
+              is not None else "")
+           + (f" {as_pct(share)} of what defenders are paid is still the pursuit bonus for taking good "
+              "angles rather than the result of the play; that share should shrink as tackles take over."
+              if share is not None else ""))
+    return dict(
+        title="4. Is the defense learning to stop plays?", meta=meta, svg=svg, table=table(plays, as_pct),
+        what="The defense is the brain every earlier run failed to teach: it stood off and let the offense "
+             "run. This chart shows how plays end <b>from the defense's side</b> — tackles (orange), sacks "
+             "(blue), touchdowns given up (green) — and, dashed grey, how much of the defense's pay is still "
+             "the practice bonus for chasing at a good angle.",
+        now=now,
+        good="Good looks like: tackles near two-thirds of plays, sacks above zero once full games start, "
+             "touchdowns a few percent, and the dashed line falling below 50%.")
+
+
+def weights_and_realism(run):
+    """The staged final weights and the realism games' verdict on each judged checkpoint."""
+    folder = f"results/{run}/final_weights"
+    parts = []
+    if os.path.isdir(folder):
+        items = sorted(os.listdir(folder))
+        parts.append("<p>Saved in <code>" + html.escape(folder) + "</code>: "
+                     + ", ".join(f"<code>{html.escape(name)}</code>" for name in items) + ".</p>")
+    else:
+        parts.append("<p>Not saved yet: weights are staged when the run ends.</p>")
+
+    ledger_path = f"results/{run}/realism_checkpoints.json"
+    if os.path.exists(ledger_path):
+        entries = [e for e in json.load(open(ledger_path, encoding="utf-8")) if e.get("means")]
+        if entries:
+            keys = list(entries[0]["means"])
+            head = "<tr><th>Checkpoint</th>" + "".join(f"<th>{html.escape(k)}</th>" for k in keys) + "<th>Verdict</th></tr>"
+            rows = []
+            for entry in entries:
+                cells = "".join(
+                    f"<td{'' if entry['inside'].get(k) else ' class=out'}>{entry['means'][k]:.2f}</td>" for k in keys)
+                rows.append(f"<tr><td>{html.escape(entry['label'])}</td>{cells}"
+                            f"<td>{'PASSED' if entry['passed'] else 'failed'}</td></tr>")
+            parts.append("<p>Each checkpoint below played the same four fixed-seed games. A number in red is "
+                         "outside real football's range; a checkpoint must be inside all of them to be "
+                         "promoted into the game.</p>"
+                         f"<table class='data realism'>{head}{''.join(rows)}</table>")
+    else:
+        parts.append("<p>No checkpoint has played the realism games yet.</p>")
+    return "".join(parts)
+
+
 def speed_from_log(run):
-    path = f"results/{run}_stdout.log"
-    if not os.path.exists(path):
+    path = next((p for p in (f"results/{run}_stdout.log", f"results/{run}_trainer.log")
+                 if os.path.exists(p)), None)
+    if path is None:
         return None
     found = re.findall(r"Offense\. Step: (\d+)\. Time Elapsed: ([\d.]+) s", open(path, errors="ignore").read())
     if not found:
         return None
-    step, seconds = int(found[-1][0]), float(found[-1][1])
-    return step / seconds if seconds else None
+    # Between the last two readings of ONE trainer process: a --resume restarts
+    # the elapsed clock but not the step count, so step / elapsed overstates it.
+    pairs = [(int(s), float(e)) for s, e in found]
+    for (s0, e0), (s1, e1) in zip(reversed(pairs[:-1]), reversed(pairs[1:])):
+        if e1 > e0 and s1 > s0:
+            return (s1 - s0) / (e1 - e0)
+    return None
+
+
+def session_window(run):
+    """(start, deadline) epoch seconds of a Tools/run_unattended.py session, or None."""
+    path = f"results/{run}/unattended.log"
+    if not os.path.exists(path):
+        return None
+    for line in open(path, encoding="utf-8"):
+        match = re.match(r"\[(.+?)\] training \S+ until (\d{4}-\d\d-\d\d \d\d:\d\d)", line)
+        if match:
+            parse = lambda text, fmt: time.mktime(time.strptime(text, fmt))
+            return parse(match.group(1), "%Y-%m-%d %H:%M:%S"), parse(match.group(2), "%Y-%m-%d %H:%M")
+    return None
 
 
 def build(run, compare):
@@ -424,6 +609,16 @@ def build(run, compare):
     rate = speed_from_log(run)
     finished = step >= MAX_STEPS - 1000
     hours_left = None if finished or not rate else (MAX_STEPS - step) / rate / 3600
+    progress_label = "of training complete"
+    window = session_window(run)
+    if window:
+        # An unattended session ends on the clock, not at max_steps.
+        start, deadline = window
+        total = deadline - start
+        ended = os.path.exists(f"results/{run}/final_weights")
+        progress = 1.0 if ended else min(1.0, max(0.0, (time.time() - start) / total))
+        hours_left = None if ended or progress >= 1.0 else (deadline - time.time()) / 3600
+        progress_label = f"of the {total / 3600:.0f}-hour training session"
     x_max = max(1_000_000, int(step * 1.25))
     starts = lesson_starts(data)
     lessons = [(start, LESSON_NAMES[index]) for start, index in starts[1:]]
@@ -469,7 +664,7 @@ def build(run, compare):
     if previous.get("Play/NetYards"):
         yards_series.append((prev_name, "--ref", previous["Play/NetYards"], True))
     svg, meta = chart("yards", yards_series, x_max, -6, 10, lambda v: f"{v:+.0f}" if v else "0",
-                      band=(4.5, 6.5, "real football: 4.5 to 6.5 yards"), lessons=lessons, notes=[
+                      band=(4.5, 6.5, "real football: 4.5 to 6.5 yards"), lessons=lessons, kind="yd", notes=[
         (step, yards, f"Now: {yards:+.1f} yards a play.\nBelow zero means the offense\nis going backwards.", 40, -34)])
     charts.append(dict(
         title="2. How far does the offense move the ball?", meta=meta, svg=svg,
@@ -479,6 +674,9 @@ def build(run, compare):
         now=f"The offense is averaging <b>{yards:+.1f} yards</b> a play — it loses ground, because the "
             "quarterback drops back with the ball and then nothing happens. The previous run started "
             "in the same hole and climbed out after roughly 400k steps."
+            if yards < 0 and compare else
+            f"The offense is averaging <b>{yards:+.1f} yards</b> a play — it is losing ground. Early in a run "
+            "that is normal: the carrier has not learned which way the end zone is."
             if yards < 0 else
             f"The offense gained <b>{yards:+.1f} yards</b> a play at the last reading. Single readings "
             "bounce around a lot, so look at the trend rather than the final dot.",
@@ -505,6 +703,8 @@ def build(run, compare):
                if steps.get("Quarterback", QB_NOVICE_STEPS) < QB_NOVICE_STEPS else ""),
         good="Good looks like: the line settles inside the shaded band instead of running to 70%+."))
 
+    charts.append(defense_card(data, x_max, lessons, run))
+
     for card in charts:
         shot = shots.get(card["meta"]["id"])
         if shot:
@@ -524,14 +724,15 @@ def build(run, compare):
     # Headline numbers are three-summary means; one summary is about a hundred plays.
     return render(run, step, progress, rate, hours_left, groups, drive_rows, charts,
                   dict(yards=recent(data, "Play/NetYards"), stall=recent(data, "Play/TimeExpiredRate"),
-                       fatigue=fatigue), compare, starts, steps, bool(shots))
+                       fatigue=fatigue, progress_label=progress_label), compare, starts, steps, bool(shots),
+                  brain_cards(run, lessons), weights_and_realism(run))
 
 
 ICONS = ["○", "◔", "◑", "◕", "●"]
 
 
 def render(run, step, progress, rate, hours_left, groups, drive_rows, charts, tiles, compare,
-           starts, steps, has_shots):
+           starts, steps, has_shots, brains, weights_html):
     lesson_index = starts[-1][1]
     entered = {index: start for start, index in starts}
     grid = []
@@ -592,7 +793,38 @@ def render(run, step, progress, rate, hours_left, groups, drive_rows, charts, ti
                 "tackle or a score." + ages)
     eta = f"about {hours_left:.1f} hours left" if hours_left else "training has stopped"
     speed = f"{rate:.0f} steps a second" if rate else ""
-    meta_json = json.dumps([c["meta"] for c in charts if c["meta"]])
+    def brain_html(card):
+        name = card["brain"]
+        if card["empty"]:
+            return (f'<section class="agent"><header><h3>{name}</h3><p>{BRAIN_BLURBS[name]}</p></header>'
+                    '<p>No readings yet: this brain has not written its first summary.</p></section>')
+        wrap = lambda part: f'<div class="chartwrap">{part["svg"]}<div class="tip" hidden></div></div>'
+        under = []
+        if card["loss"]:
+            under.append("<h4>Prediction error (value loss)</h4><p class='what'>How wrong the brain's guess of "
+                         "\"how well will this go?\" is. It spikes when the game changes under it (a new lesson, "
+                         "an opponent that improved) and settles as the guesses get better. Smoothed over five "
+                         f"readings. Trend: {card['loss']['trend']}.</p>" + wrap(card["loss"]))
+        if card["entropy"]:
+            under.append("<h4>Exploration (entropy)</h4><p class='what'>How much the brain still tries random "
+                         "things. It should drift down slowly as it settles on what works; a sudden drop to the "
+                         "floor means it stopped exploring too early. "
+                         f"Trend: {card['entropy']['trend']}.</p>" + wrap(card["entropy"]))
+        if card["policy_loss"] is not None:
+            under.append(f"<p class='what'>Policy loss, last reading: {card['policy_loss']:.4f}. For this kind of "
+                         "trainer it stays near zero by design and says little on its own.</p>")
+        return (f'<section class="agent"><header><h3>{name}</h3><p>{BRAIN_BLURBS[name]} '
+                f'{fmt_steps(card["steps"])} steps of practice.</p></header>'
+                f'<p><b>Reward</b> — what this brain is paid on average for a play. Trend: {card["reward"]["trend"]}.'
+                + (" The dashed line is the whole team's shared result." if name in ("Offense", "Defense") else "")
+                + "</p>" + wrap(card["reward"])
+                + (f"<details><summary>Under the hood: prediction error and exploration</summary>{''.join(under)}</details>"
+                   if under else "") + "</section>")
+
+    brains_section = "".join(brain_html(card) for card in brains)
+    brain_metas = [part["meta"] for card in brains if not card["empty"]
+                   for part in (card["reward"], card["loss"], card["entropy"]) if part]
+    meta_json = json.dumps([c["meta"] for c in charts if c["meta"]] + brain_metas)
     charts_sub = ("These are screenshots of TensorBoard itself, with numbered notes added. Each reads left to "
                   "right: more practice as you move right. The shaded part is after training was restarted."
                   if has_shots else
@@ -649,6 +881,8 @@ ol.lessons li b {{ display:block; color: var(--text); }} ol.lessons li span {{ d
 .l3 .meter i {{ background: var(--l3); }} .l4 .meter i {{ background: var(--l4); }}
 .value {{ font-variant-numeric: tabular-nums; }} .target, .cellnote {{ font-size: 12px; color: var(--muted); }}
 .cellnote {{ color: var(--text2); margin-top: 4px; font-style: italic; }}
+h4 {{ font-size: 14px; margin: 14px 0 2px; }} td.out {{ color: #c0392b; font-weight: 600; }}
+.agent .what {{ color: var(--text2); font-size: 13.5px; }}
 .scale {{ display:flex; flex-wrap:wrap; gap: 14px; font-size: 13px; color: var(--text2); margin: 8px 0; }}
 .bars {{ background: var(--surface); border:1px solid var(--line); border-radius: 12px; padding: 16px; }}
 .bar {{ display:grid; grid-template-columns: 170px 1fr 44px; align-items:center; gap: 10px; padding: 4px 0; }}
@@ -693,19 +927,19 @@ footer {{ color: var(--muted); font-size: 12.5px; margin-top: 36px; }}
 <div class="lede"><b>In one sentence:</b> {lede}</div>
 
 <div class="tiles">
-  <div class="tile"><b>{progress * 100:.0f}%</b><span>of training complete</span><div class="progress"><i style="width:{progress * 100:.1f}%"></i></div></div>
+  <div class="tile"><b>{progress * 100:.0f}%</b><span>{tiles['progress_label']}</span><div class="progress"><i style="width:{progress * 100:.1f}%"></i></div></div>
   <div class="tile"><b>{f"{hours_left:.1f} h" if hours_left else "Done"}</b><span>{eta}{" · " + speed if speed and hours_left else ""}</span></div>
   <div class="tile"><b>{tiles["yards"]:+.1f}</b><span>yards gained per play, last three readings (real football: about 5.5)</span></div>
   <div class="tile"><b>{tiles["stall"] * 100:.0f}%</b><span>of plays where the clock just runs out, last three readings (goal: under 5%)</span></div>
   <div class="tile"><b>{tiles["fatigue"] * 100:.0f}%</b><span>tiredness at the end of a play. New in this run: players now get tired and carry it to the next play.</span></div>
 </div>
 
-<h2>The three lessons</h2>
+<h2>The {NUMBER_WORDS.get(len(LESSON_NAMES), len(LESSON_NAMES))} lesson{'' if len(LESSON_NAMES) == 1 else 's'}</h2>
 <p class="sub">Practice gets harder in stages, like a coach starting near the goal line before using the whole field.</p>
 <ol class="lessons">{lesson_html}</ol>
 
 <h2>Who can do what</h2>
-<p class="sub">There are three "brains". Each one controls a group of players and is learning its own set of skills.
+<p class="sub">Each "brain" controls a group of players and is learning its own set of skills (the defense's play-caller has its own, charted further down).
 Ratings come straight from the training numbers and update each time this report is rebuilt.</p>
 <div class="scale">{"".join(f"<span>{ICONS[i]} {LEVELS[i]}</span>" for i in range(5))}</div>
 {"".join(grid)}
@@ -715,9 +949,19 @@ Ratings come straight from the training numbers and update each time this report
 what pure random twitching looks like. A bar sitting on the tick means that position has not learned to run on purpose yet.</p>
 <div class="bars">{bars}</div>
 
-<h2>The three charts that matter</h2>
+<h2>The charts that matter</h2>
 <p class="sub">{charts_sub}</p>
 {chart_html}
+
+<h2>How each brain is learning</h2>
+<p class="sub">The same curves a machine-learning engineer reads in TensorBoard, one card per brain, with what each
+line means. Reward is open; the engine-room curves are folded under it. Rewards are zero-sum between offense and
+defense, so a rising defense line usually means a falling offense line — that is the two sides competing, not one
+of them breaking.</p>
+{brains_section}
+
+<h2>Saved weights and the realism check</h2>
+<div class="card">{weights_html}</div>
 
 <footer>{source}
 {"Grey dashed lines are " + compare + ", the previous run, stopped at about 2.5M steps. " if compare and not has_shots else ""}
@@ -730,7 +974,8 @@ const charts = {meta_json};
 for (const c of charts) {{
   const svg = document.getElementById(c.id), wrap = svg.parentElement, tip = wrap.querySelector('.tip');
   const cross = svg.querySelector('.cross'), hit = svg.querySelector('.hit');
-  const fmt = v => c.id === 'yards' ? (v >= 0 ? '+' : '') + v.toFixed(1) + ' yd' : Math.round(v * 100) + '%';
+  const fmt = v => c.kind === 'yd' ? (v >= 0 ? '+' : '') + v.toFixed(1) + ' yd'
+    : c.kind === 'num' ? (Math.abs(v) >= 10 ? v.toFixed(1) : v.toPrecision(3)) : Math.round(v * 100) + '%';
   hit.addEventListener('mousemove', e => {{
     const box = svg.getBoundingClientRect(), scale = c.width / box.width;
     const x = (e.clientX - box.left) * scale;

@@ -1354,9 +1354,19 @@ namespace PoFootball.Agents
             bool countsAsProgress = Reward_Progress.CountsAsProgress(
                 _ball == null ? Systems_BallState.Held : _ball.State);
 
+            // Nor the dropback: behind the line, before the throw, the baseline
+            // stays at the snap. See Reward_Progress.HoldsBaselineInBackfield.
+            bool holdsBaseline = Reward_Progress.HoldsBaselineInBackfield(
+                _play.Kind == Systems_PlayKind.Scrimmage,
+                _play.PossessionChanged,
+                _play.ForwardPassThrown,
+                _play.PhysicsTick,
+                ballY,
+                _play.LineOfScrimmageY);
+
             float yardsDelta = 0f;
 
-            if (countsAsProgress)
+            if (countsAsProgress && !holdsBaseline)
             {
                 yardsDelta = (ballY - _previousBallY) / Systems_FieldModel.YARD;
                 _previousBallY = ballY;

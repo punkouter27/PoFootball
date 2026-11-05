@@ -49,7 +49,7 @@ import argparse
 import ctypes
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -160,6 +160,12 @@ def check(run_dir: Path, consecutive: int) -> tuple[list, list, int]:
         line = f"{rule.severity} {rule.name}: {reading} - {rule.why}"
         if tripped:
             (halts if rule.severity == HALT else warnings).append(line)
+        elif (points and points[-1].step < rule.after_step
+              and ((points[-1].value > rule.threshold) if rule.above
+                   else (points[-1].value < rule.threshold))):
+            # In a rule's grace period a reading past the line is still worth
+            # seeing; it just cannot end the run yet.
+            warnings.append(f"WARN {rule.name} (judged from {rule.after_step:,}): {reading} - {rule.why}")
         else:
             print(f"  ok {rule.name}: {reading}")
 
@@ -217,7 +223,17 @@ def main() -> int:
     parser.add_argument("--stop-trainer", action="store_true",
                         help="on a HALT, send the trainer CTRL+C (needs --trainer-pid)")
     parser.add_argument("--trainer-pid", type=int, default=0)
+    parser.add_argument("--stall-after", type=int, default=0,
+                        help="judge the stall rule only from this step (a FRESH run: "
+                             "an untrained carrier wanders to the ceiling before any "
+                             "defense has learned to tackle; the rule was set on "
+                             "warm-started runs). Warns before then. Default 0.")
     args = parser.parse_args()
+
+    if args.stall_after:
+        global RULES
+        RULES = tuple(replace(rule, after_step=args.stall_after) if rule.name == "stall" else rule
+                      for rule in RULES)
 
     run_dir = RESULTS_DIR / args.run
     if not run_dir.is_dir():

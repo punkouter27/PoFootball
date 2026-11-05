@@ -537,6 +537,26 @@ namespace PoFootball.Tests
             Assert.That(Reward_Progress.CountsAsProgress(Systems_BallState.Held), Is.True);
         }
 
+        /// <summary>
+        /// The dropback is not charged by the yard (football_base26: the
+        /// quarterback learned to run from the snap and never threw). Past the
+        /// line, after a throw, after the window or after a turnover it is
+        /// ordinary progress again.
+        /// </summary>
+        [Test]
+        public void TheDropback_IsNotChargedTickByTick()
+        {
+            const float line = 30f;
+            int inWindow = Systems_SimConstants.THROW_WINDOW_TICKS;
+
+            Assert.That(Reward_Progress.HoldsBaselineInBackfield(true, false, false, inWindow, line - 6f, line), Is.True);
+            Assert.That(Reward_Progress.HoldsBaselineInBackfield(true, false, false, inWindow, line + 1f, line), Is.False);
+            Assert.That(Reward_Progress.HoldsBaselineInBackfield(true, false, true, inWindow, line - 6f, line), Is.False);
+            Assert.That(Reward_Progress.HoldsBaselineInBackfield(true, false, false, inWindow + 1, line - 6f, line), Is.False);
+            Assert.That(Reward_Progress.HoldsBaselineInBackfield(true, true, false, inWindow, line - 6f, line), Is.False);
+            Assert.That(Reward_Progress.HoldsBaselineInBackfield(false, false, false, inWindow, line - 6f, line), Is.False);
+        }
+
         [Test]
         public void Block_PaysOnlyWhenTheBlockerIsBetweenTheRusherAndTheBall()
         {
