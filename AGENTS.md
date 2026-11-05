@@ -77,76 +77,79 @@ See `.xgrok/BEST_PRACTICES.md` and `.xgrok/SECURITY.md`.
 
 ---
 
-# UNITY_AGENT
+# UU_AGENT
+Scope: RL-trained humanoids and animals with realistic motion on Earth, in Unity or Unreal.
 
-> **Ignore the instructions about using MuJoCo or Isaac Lab if ML-Agents is being
-> used in this app.** PoFootball trains with Unity ML-Agents (`mlagents` 1.1.0, see
-> `CLAUDE.md`), so every rule marked **[MuJoCo/Isaac]** below is inactive here. They
-> are kept so this rule set stays identical across projects.
+> **How this lands in PoFootball.** The rule set below is kept word for word so it
+> stays identical across projects. Where it collides with this project, `CLAUDE.md`
+> wins, and these clauses are inactive here:
+> - **Physics: MuJoCo / `org.mujoco`.** PoFootball is 2D `Rigidbody2D` shapes trained
+>   with Unity ML-Agents (`mlagents` 1.1.0); there is no skeleton, no GLB and no
+>   Blender pipeline, so §1's raw/exported asset rows and §2's skeleton-match clause
+>   have nothing to apply to.
+> - **Build stamp `YYMMDD` bottom-right.** The bottom-right corner shows
+>   `Application.version` (CLAUDE.md §3, `Systems_StatusHudBootstrap`).
+> - **§3 Hierarchy (one policy per motor skill family).** The four brains here are
+>   per role (Offense, Quarterback, Defense, DefenseCall), not per motor skill, and a
+>   change of observation shape is a contract revision (`Agent_ActionContract`), not
+>   an append-only interface.
+> - **§4 Graduation gate.** Promotion goes through `Tools/promote_brain.py` and the
+>   realism bands, not a 100-episode score streak.
+> - **Docs folder.** Run logs go in `results/<run-id>/MANIFEST.md`; `docs/` holds the
+>   design notes.
 
-## Workflow
-- Only use the `master` branch for all work; only use other branches if specifically asked to.
-- Check for a `DOCS` folder in the root to get an overall summary of the project.
-- When doing a git sync, always commit all changes beforehand.
-- At the end of any prompt that has an answer longer than 100 words, add a TLDR 20-word summary.
+### 1. Workflow & Setup
+- **Git:** Work on `master`. Commit before syncing or pulling. Check `/DOCS` first.
+- **Automation:** Set up scenes, prefabs and levels via CLI and headless Blender. UI changes get before/after
+  screenshots and an HTML report in `SCREENSHOTS/`.
+- **Build stamp:** Show the build date (`YYMMDD`) in the bottom-right corner.
 
-## Training
-- **[MuJoCo/Isaac]** All training should be done with MuJoCo/Newton.
-- **[MuJoCo/Isaac]** Ask me for a skinned mesh before attempting to train. You need to
-  get the rig structure from that model and import it into MuJoCo/Newton for training.
-- **[MuJoCo/Isaac]** When training in MuJoCo or Isaac Lab, show the UI of those apps to
-  let me observe how the creature moves during and after training. Use Newton to show
-  training if that is optimal.
-- **[MuJoCo/Isaac]** Use https://github.com/joanllobera/mujoco-bin/ to compile for
-  Android phones.
-- **[MuJoCo/Isaac]** When 30+ minutes of MuJoCo RL training is needed, always close the
-  Unreal/Unity editor if it dramatically speeds up training, and let me know when I can
-  open it back up (training is over).
-- Always start TensorBoard when training is started so I can view progress.
-- When starting training, check to make sure there are no obsolete behaviours on
-  TensorBoard taking up room. If there are, remove them.
-- When only doing RL training without changing Unity, close the Unity editor and then
-  open it back up when training is complete.
-- When training over 30 minutes, take screenshots of the 3 most consequential charts in
-  TensorBoard and explain in simple terms what they describe. Compare the currently
-  running training to previous runs and explain in simple terms if it is doing better
-  or worse and why. Put it in an HTML file and describe the graphs at 3 levels
-  (1. Toddler 2. Child 3. Adult).
+| | Unity | Unreal Engine 5 |
+|---|---|---|
+| Background | Enable Run In Background | Disable Use Less CPU when in Background |
+| Raw assets | `Assets/Art/Raw/` | `Content/Art/Raw/` |
+| Exported assets | `Assets/Art/Exports/GLB/` | `Content/Art/Exports/` |
+| Physics | MuJoCo (`org.mujoco`), not PhysX | MuJoCo / URLab, not Chaos |
+| Policy runtime | Unity Sentis / ONNX | NNE / ONNX Runtime |
 
-## Physics & creatures
-- Creatures should move realistically with earth gravity and realistic joint movement,
-  and mass according to their size.
-- Joints should move at a speed and a force that resemble real humans (if the trained
-  agent is the human).
-- Make sure all body parts of all creatures accurately collide with each other, and
-  creatures cannot pass through each other or anything in the environment.
+### 2. Physics & Realism
+- **Collision:** Primitive colliders only (capsules, spheres, boxes). Non-adjacent parts collide with each other.
+  Zero penetration at rest, at joint limits and through motion.
+- **Fidelity:** Gravity −9.81 m/s², anatomical mass, realistic joint, torque and speed limits. Skeleton joints
+  match between the 3D files and the simulator.
+- **Smooth motion:** Rewards carry action-rate/jerk penalties (or low-pass filtering): fluid motion, no jitter.
 
-## Self-collision
-- Every creature collides with itself using simple shapes (capsules, boxes, spheres)
-  fitted inside its skinned mesh. Never use the visual mesh or the bones as colliders.
-- All body-part pairs collide except parent–child pairs and pairs that overlap in the
-  default standing pose; joint limits handle those.
-- Before training, verify that no pair touches in the T-pose, the default stance and a
-  normal arm and leg swing.
-- Self-contact never ends an episode. If the policy leans on it, add a small
-  self-contact force penalty.
-- Train a new skill from a warm start (a brain trained without self-collision, or the
-  previous rung) rather than from scratch.
+### 3. Policy Architecture & Retraining
+- **Hierarchy:** A few small policies, one per motor skill family (locomotion, balance/get-up, task skills). Cover
+  variants with command inputs (velocity, gait, target, style), not new policies. Layered rule-based directors
+  (game flow → body → skill) switch policies on physical state (contacts, centre of mass, falls) through one
+  transition table, mirrored in every runtime. Policies never pick each other.
+- **Hand-overs:** All policies of a body share the observation layout, joint order, action map, timing and
+  motion-style reward. Preload every policy. Pass on the last action; never snap poses or blend outputs. Train each
+  policy on the states it inherits (get-up from real falls).
+- **Frozen interface:** Append inputs only at the end, with zero-initialised weights; never reorder or remove them.
+  If the interface must break, distil the old policy into the new layout.
+- **Avoid retraining:** Keep UI, game flow and director rules outside the policies. Randomise body (mass, strength,
+  limb length), ground and pushes, so new characters within those ranges need no retraining. Otherwise fine-tune
+  from the shipped checkpoint, keep old opponents and tasks in the mix, and re-pass the gate (§4).
+- **Before any change:** List the policies it touches (body physics → that body's; rules → the policies acting
+  under them; new skill → its policy plus director rows; visuals → none) and log that in `/DOCS`. Afterwards, re-run
+  every policy's regression scenarios (task + realism). Tag each checkpoint with its interface and physics versions.
 
-## Unity Editor & scene
-- Use the following tools to interact with Unity/Unreal as needed — whichever can
-  provide the best results for the app: Unity CLI pipeline /
-  https://github.com/CoplayDev/unity-mcp / https://github.com/IvanMurzak/Unity-MCP
-- Create as many prefabs/objects in the scene using MCP as possible, so I can easily
-  adjust the positions of these static objects in the scene rather than having the
-  code create them.
-- Set this in Unity to avoid stalling: enable "No Throttling" in Editor preferences and
-  "Run In Background" in Player settings via MCP, and turn on auto tick so it keeps
-  updating in the background.
+### 4. Training, Gates & Reports
+- **Execution:** Close the editor for runs over 30 min or when free RAM drops below 4 GB. Save and commit first.
+- **Cleanup:** Delete failed runs, short tests (<5,000 steps) and unneeded checkpoints. Never delete a run written
+  to in the last 24 h or one a queue will resume.
+- **Graduation gate:** Export ONNX only after the target score holds for 100 straight episodes with no NaN gradients.
+- **Telemetry:** Run TensorBoard with every run. Log metrics and progress to `/DOCS/<YYYYMMDD>/` so later agents
+  can pick up where a run left off. Stream to Azure Table Storage when asked.
+- **Reports & updates:** Runs over 30 min get an HTML report with metric charts and run-over-run deltas. Estimate
+  training time at startup. Send hourly updates (status grid, key improvements, short summary).
 
-## UI
-- When a change to the UI is made, take an annotated screenshot showing the new and old
-  UI and annotate the changes. Put it in an HTML file.
+### 5. Communication
+- **Large changes:** Over 100 lines of code: offer 3 roadmap/architecture questions.
+- **Summary:** Responses over 100 words end with a ~20-word TL;DR.
+- **Problem solving:** End with a proposed fix for the app's main open issue and ask before acting on it.
 
 ## CI/CD and Azure (same section in every Po repo)
 
