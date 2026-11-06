@@ -147,6 +147,17 @@ namespace PoFootball.Agents
         /// <summary>
         /// Whether <paramref name="carrier"/> may pitch the ball right now: carrying
         /// it, live, with a team-mate level or behind inside range.
+        ///
+        /// NOT THE QUARTERBACK BEFORE HIS CALL LATCHES. The release was enabled on
+        /// CanLateral from the snap, and until DROPBACK_TICKS a release can only be a
+        /// pitch, so football_base26/27 learned to pitch to a back 6-23 ticks after
+        /// every snap: Editor_PassDiagnostic saw the ball leave the quarterback before
+        /// the latch on 139 of 140 scrimmage plays, pass calls included, and a pass
+        /// call that latches after the ball has gone can never be thrown. Real
+        /// football calls the play in the huddle; here the call IS the play, so
+        /// nothing leaves his hands until it is made. After the latch a release in
+        /// the pocket on a pass call throws (CanReleasePass is checked first) and a
+        /// pitch stays open for the option and the scramble.
         /// </summary>
         internal static bool CanLateral(
             Systems_PlayModel play, Systems_BallModel ball, Systems_BallSystem ballSystem,
@@ -155,12 +166,21 @@ namespace PoFootball.Agents
             return carrier.IsCarrier
                 && play != null
                 && play.Phase == Systems_PlayPhase.Live
+                && !IsQuarterbackBeforeTheCall(play, carrier)
                 && ball != null
                 && ball.IsHeld
                 && ball.CarrierId == carrier.Id
                 && ballSystem != null
                 && !ballSystem.IsKickoffNotYetKicked()
                 && ballSystem.ResolveLateralTarget(carrier, Vector2.zero) != null;
+        }
+
+        /// <summary>A quarterback holding the ball on a play whose call has not latched yet.</summary>
+        private static bool IsQuarterbackBeforeTheCall(Systems_PlayModel play, Systems_IPlayerHandle carrier)
+        {
+            return carrier.Role == Systems_PlayerRole.Quarterback
+                && play.Kind.HasLiveCall()
+                && !play.CallIsLatched;
         }
 
         /// <summary>

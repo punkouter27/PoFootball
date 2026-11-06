@@ -205,6 +205,29 @@ namespace PoFootball.Tests
                 "the aimed pitch alone finds nobody downfield — the defect TryPitch exists for");
         }
 
+        /// <summary>
+        /// football_base26/27: the quarterback pitched 6-23 ticks after every snap,
+        /// before his call latched, so no pass call could ever be thrown.
+        /// </summary>
+        [Test]
+        public void TheQuarterback_CannotPitch_BeforeHisCallLatches()
+        {
+            // LatchCall(None) is refused, so this play is live with no call yet.
+            Fixture before = new Fixture(Systems_PlayCall.None);
+            Assert.That(before.Play.CallIsLatched, Is.False);
+            Assert.That(
+                Agent_ActionLegality.CanLateral(before.Play, before.Ball, before.BallSystem, before.Quarterback),
+                Is.False, "a back is behind him, but the call has not been made");
+            Assert.That(
+                Agent_ActionLegality.CanReleasePass(before.Play, before.Ball, before.Quarterback),
+                Is.False, "no pass is on before the call either: the release stays masked");
+
+            Fixture after = new Fixture(Systems_PlayCall.KeepQuarterback);
+            Assert.That(
+                Agent_ActionLegality.CanLateral(after.Play, after.Ball, after.BallSystem, after.Quarterback),
+                Is.True, "once the call is made the option pitch is back on");
+        }
+
         [Test]
         public void NoReleaseIsEnabled_ForAPlayerWithoutTheBall()
         {

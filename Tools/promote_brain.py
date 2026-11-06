@@ -688,6 +688,12 @@ def main() -> int:
         help="the --num-envs the run used. Recorded in MANIFEST.md; it changes batching.",
     )
     parser.add_argument("--name", default="Football", help="agent family name")
+    parser.add_argument(
+        "--from", dest="from_dir", type=Path, metavar="DIR",
+        help="promote <behavior>.onnx from DIR instead of the run's final export -- "
+             "e.g. results/<run>/final_weights/best_realism_<step>, the checkpoint "
+             "Tools/checkpoint_realism.py judged best. Shape and speed-clamp gates still apply.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="validate, write nothing")
     parser.add_argument(
         "--verify", action="store_true",
@@ -740,7 +746,12 @@ def main() -> int:
 
     for behavior in contract["behaviors"]:
         try:
-            source = latest_checkpoint(run_dir, behavior)
+            if args.from_dir is not None:
+                source = args.from_dir.resolve() / f"{behavior}.onnx"
+                if not source.is_file():
+                    raise ContractError(f"no {behavior}.onnx in {args.from_dir}")
+            else:
+                source = latest_checkpoint(run_dir, behavior)
         except ContractError as error:
             failures[behavior] = [str(error)]
             print(f"  {behavior:<20} MISSING  {error}")
