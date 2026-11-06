@@ -11,6 +11,39 @@ namespace PoFootball.Rewards
     /// </summary>
     public static class Reward_Terminal
     {
+        /// <summary>
+        /// What the fouls <paramref name="playerId"/> committed on this play cost HIM,
+        /// as a non-positive reward, on top of his team's share of the same price.
+        ///
+        /// WHY (football_base28, 2026-11-05). Once the quarterback could no longer
+        /// pitch before his call (Agent_ActionLegality.CanLateral) he threw at the
+        /// latch, and rushers warm-started from a brain that had never faced a
+        /// thrown ball kept arriving at full speed: roughing the passer on 7 of 46
+        /// realism plays, Play/FlagRate 0.05-0.19, a watcher HALT at 250k steps. The
+        /// flag was priced (Systems_FoulPrice) but only to the GROUP, split over
+        /// eleven defenders, ten of whom did nothing. The one who hit him now pays
+        /// it himself. Not zero-sum on purpose: the other side gains nothing extra,
+        /// so nobody can farm it. Reward, not contract.
+        /// </summary>
+        public static float OwnFouls(Systems_PlayModel play, int playerId, Systems_TeamSide side)
+        {
+            float cost = 0f;
+
+            for (int index = 0; index < play.FoulCount; index++)
+            {
+                Systems_Foul foul = play.GetFoul(index);
+
+                if (foul.IsNone || foul.PlayerId != playerId || foul.Side != side)
+                {
+                    continue;
+                }
+
+                cost += Systems_FoulPrice.Of(foul, play.LineOfScrimmageY, play.PassCompleted, false);
+            }
+
+            return -cost;
+        }
+
         /// <summary>An ordinary scrimmage down with no flags — the shape every caller had before revision 14.</summary>
         public static float For(
             Systems_TeamSide side,

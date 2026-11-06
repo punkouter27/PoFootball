@@ -914,5 +914,26 @@ namespace PoFootball.Tests
                 }
             }
         }
+
+        /// <summary>football_base28: roughing was priced to the defense as a group only.</summary>
+        [Test]
+        public void TheFouler_PaysForHisOwnFlag_AndNobodyElseDoes()
+        {
+            Systems_PlayModel play = new Systems_PlayModel();
+            play.BeginEpisode(0f, 0f, 1, Systems_GameRules.YARDS_TO_GAIN);
+            play.Snap();
+            play.RecordFoul(new Systems_Foul(
+                Systems_FoulType.RoughingThePasser, Systems_TeamSide.Defense, 15, 0f, 60));
+
+            float fouler = Reward_Terminal.OwnFouls(play, 15, Systems_TeamSide.Defense);
+
+            Assert.That(fouler, Is.LessThan(0f), "the man who hit the passer pays");
+            Assert.That(fouler, Is.EqualTo(-Systems_FoulPrice.Of(
+                play.GetFoul(0), play.LineOfScrimmageY, play.PassCompleted, false)).Within(1e-6f));
+            Assert.That(Reward_Terminal.OwnFouls(play, 14, Systems_TeamSide.Defense), Is.EqualTo(0f),
+                "a team-mate who did nothing pays nothing extra");
+            Assert.That(Reward_Terminal.OwnFouls(play, 15, Systems_TeamSide.Offense), Is.EqualTo(0f),
+                "the same slot on the other side is not him");
+        }
     }
 }

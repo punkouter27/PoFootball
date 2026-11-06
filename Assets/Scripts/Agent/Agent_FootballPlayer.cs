@@ -1724,6 +1724,18 @@ namespace PoFootball.Agents
 
         public void EndEpisodeNow()
         {
+            // The fouler's own bill, before the episode closes (Reward_Terminal.OwnFouls).
+            if (_play != null)
+            {
+                float ownFouls = Reward_Terminal.OwnFouls(_play, Id, _side);
+
+                if (ownFouls != 0f)
+                {
+                    AddReward(ownFouls);
+                    _terminalRewardSum += ownFouls;
+                }
+            }
+
             // BEFORE EndEpisode, not after. EndEpisode is what closes the trajectory
             // the trainer attributes these steps to, and a stat written after it
             // lands in the next play's window.

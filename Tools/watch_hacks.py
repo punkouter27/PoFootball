@@ -77,7 +77,12 @@ class Rule:
 RULES = (
     Rule("stall", "Defense", "Play/TimeExpiredRate", True, 0.05, HALT, 0,
          "plays reaching the 600-tick ceiling: the base20 stall"),
-    Rule("flags", "Offense", "Play/FlagRate", True, 0.06, HALT, 0,
+    # Judged from 1M steps (2026-11-06): a warm start across a RULE change spikes it
+    # while the old habits meet the new game -- football_base28/29 read 0.05-0.19
+    # in their first 250k steps once the quarterback started throwing (late hits
+    # on him). The base18/19 hack it exists for climbed over millions of steps,
+    # so it is still caught; the per-foul Foul/* series say which flag it is.
+    Rule("flags", "Offense", "Play/FlagRate", True, 0.06, HALT, 1_000_000,
          "flags on more than 6% of plays: the base18/19 block in the back"),
     Rule("solver", "Offense", "Control/SpeedClampRate", True, 0.001, HALT, 0,
          "pileup guard firing: a policy farming solver blow-ups"),

@@ -67,6 +67,16 @@ namespace PoFootball.Agents
         private const int CALL_SLOT_COUNT = Sensor_FootballState.PLAY_CALL_BRANCH_SIZE;
 
         private ISubscriber<Systems_PlayEndedMessage> _endedSubscriber;
+        private Systems_PlayModel _play;
+
+        /// <summary>
+        /// "Foul/&lt;Type&gt;": 1 on a play that drew that flag (2026-11-06). Play/FlagRate
+        /// alone could not say WHICH flag football_base28/29 were drawing; roughing the
+        /// passer was found by reading a realism game's console instead. Built once,
+        /// so the per-play loop allocates nothing.
+        /// </summary>
+        private static readonly string[] FoulKeys = BuildFoulKeys();
+        private readonly bool[] _foulSeen = new bool[FoulKeys.Length];
 
         /// <summary>
         /// Rolling histogram of latched calls, indexed by Systems_PlayCall. Slot 0
@@ -83,9 +93,59 @@ namespace PoFootball.Agents
         private IDisposable _subscription;
 
         [Inject]
-        public void Construct(ISubscriber<Systems_PlayEndedMessage> endedSubscriber)
+        public void Construct(
+            ISubscriber<Systems_PlayEndedMessage> endedSubscriber, Systems_PlayModel play)
         {
             _endedSubscriber = endedSubscriber;
+            _play = play;
+        }
+
+        private static string[] BuildFoulKeys()
+        {
+            Array types = Enum.GetValues(typeof(Systems_FoulType));
+            int size = 0;
+            for (int index = 0; index < types.Length; index++)
+            {
+                size = Math.Max(size, (int)types.GetValue(index) + 1);
+            }
+
+            string[] keys = new string[size];
+            for (int index = 0; index < types.Length; index++)
+            {
+                Systems_FoulType type = (Systems_FoulType)types.GetValue(index);
+                keys[(int)type] = type == Systems_FoulType.None ? null : $"Foul/{type}";
+            }
+
+            return keys;
+        }
+
+        /// <summary>One sample per foul type per play, read off the play the referee just ended.</summary>
+        private void RecordFouls(StatsRecorder stats)
+        {
+            for (int index = 0; index < _foulSeen.Length; index++)
+            {
+                _foulSeen[index] = false;
+            }
+
+            if (_play != null)
+            {
+                for (int index = 0; index < _play.FoulCount; index++)
+                {
+                    int type = (int)_play.GetFoul(index).Type;
+                    if (type > 0 && type < _foulSeen.Length)
+                    {
+                        _foulSeen[type] = true;
+                    }
+                }
+            }
+
+            for (int index = 0; index < FoulKeys.Length; index++)
+            {
+                if (FoulKeys[index] != null)
+                {
+                    stats.Add(FoulKeys[index], _foulSeen[index] ? 1f : 0f);
+                }
+            }
         }
 
         /// <summary>
@@ -121,6 +181,7 @@ namespace PoFootball.Agents
             stats.Add("Play/DownedRate", Rate(message.Outcome, Systems_PlayOutcome.Downed));
             stats.Add("Play/PossessionChangeRate", message.PossessionChanged ? 1f : 0f);
             stats.Add("Play/FlagRate", message.FoulCount > 0 ? 1f : 0f);
+            RecordFouls(stats);
             stats.Add(
                 "Play/ReturnTouchdownRate",
                 message.Outcome == Systems_PlayOutcome.Touchdown

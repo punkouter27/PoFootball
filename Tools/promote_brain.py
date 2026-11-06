@@ -459,6 +459,34 @@ def speed_clamp_rate(run_dir: Path, behavior: str) -> float:
     return sum(window) / len(window)
 
 
+def game_wide_speed_clamp_rate(run_dir: Path, behavior: str, behaviors: list) -> float:
+    """
+    The behavior's own SpeedClampRate, or -- when it never wrote one -- another
+    behavior's from the same run, said out loud.
+
+    The series comes from Academy.Instance.StatsRecorder (Agent_Telemetry), which
+    is ENVIRONMENT-wide: ML-Agents hands every stat to every behavior's writer, so
+    the Quarterback and DefenseCall series are copies of Offense's. A brain that
+    trained fewer steps than its summary_freq (base28's Quarterback: 26k at 50k)
+    writes none, and the same number is read from a brain that did. If no brain
+    in the run wrote it, the gate still refuses.
+    """
+    try:
+        return speed_clamp_rate(run_dir, behavior)
+    except ContractError as own_error:
+        for other in behaviors:
+            if other == behavior:
+                continue
+            try:
+                rate = speed_clamp_rate(run_dir, other)
+            except ContractError:
+                continue
+            print(f"  {behavior:<20} {SPEED_CLAMP_TAG} not written; read the game-wide "
+                  f"series from {other} ({rate:.4f})")
+            return rate
+        raise own_error
+
+
 def check_realism(report_path: Path, target_dir: Path | None) -> int:
     """
     Judges a results/realism/*.json written by Unity's Evaluate Realism tool.
@@ -761,7 +789,7 @@ def main() -> int:
         sources[behavior] = source
 
         try:
-            clamp_rate = speed_clamp_rate(run_dir, behavior)
+            clamp_rate = game_wide_speed_clamp_rate(run_dir, behavior, contract["behaviors"])
             if clamp_rate > SPEED_CLAMP_CEILING:
                 problems.append(
                     f"{SPEED_CLAMP_TAG} {clamp_rate:.4f} > {SPEED_CLAMP_CEILING} over the "
