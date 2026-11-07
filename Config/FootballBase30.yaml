@@ -1,0 +1,134 @@
+# PoFootball -- CONTRACT_REVISION 17. football_base29's FINAL checkpoints WARM-STARTED,
+# everything else (rewards, hyperparameters, env) identical to base29.
+#
+# Pairs 1:1 with run-id `football_base30` (UNITY_RULES section 1).
+#
+# WHY. football_base29 (fouler pays his own flag, Reward_Terminal.OwnFouls) was
+# working: Play/FlagRate fell 0.16 -> 0.12 -> 0.08 -> 0.073 over 1.25M steps, with
+# completions 0.65-0.73 and Call/Entropy ~1.7. The watcher HALTED it at 1.25M because
+# 0.073 is still over the 0.06 line, one summary after its 1M grace ran out. This is
+# the 8-hour continuation of that trend, with the same guard: a fresh run-id restarts
+# the 1M grace, and the rule still HALTs if flags have not come under 0.06 by then.
+#
+# URGENT POLICIES, in order: Defense (flags; Play/SackRate ~0.01, the passive rush) ->
+# Offense run game (Football_v04 read 2.29 yd/carry, band 3.0-6.0) -> Quarterback and
+# DefenseCall (healthy; DefenseCall calls ZeroBlitz on ~50% of downs -- watch it).
+# Hyperparameters are left equal to base29 on purpose so the two runs read as one curve.
+#
+# ENV. Builds/FootballEnv is the 2026-11-06 00:12 build base29 resumed on: it has
+# OwnFouls but NOT the Foul/* telemetry (89a2aed), so there is no per-foul breakdown
+# in this run. The rebuild failed on the Unity licence (access token expired).
+#
+# Launch (CUDA_VISIBLE_DEVICES=-1 is set by the runner):
+#   .venv\Scripts\python.exe Toolsun_unattended.py --run football_base30 `
+#     --config Config\FootballBase30.yaml --hours 8 --stall-after 1500000 --realism-last 0
+#
+# WHAT TO READ: Play/FlagRate under 0.06 and staying there, Play/SackRate off zero,
+# Pass/CompletionPerAttempt 0.55-0.75, Call/Entropy > 1.2; then the realism line.
+behaviors:
+  Offense: &football_brain
+    trainer_type: poca
+    init_path: results/football_base29/Offense/Offense-1283946.pt  # WARM: base29 final
+
+    hyperparameters:
+      batch_size: 1024
+      buffer_size: 20480
+      learning_rate: 3.0e-4
+      beta: 5.0e-3
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 3
+      learning_rate_schedule: constant
+      beta_schedule: constant
+      epsilon_schedule: constant
+
+    network_settings:
+      normalize: false            # Sensor_FootballState emits [-1, 1] already;
+                                  # Systems_ContractTests asserts this stays off.
+      hidden_units: 256
+      num_layers: 2
+      vis_encode_type: simple
+
+    reward_signals:
+      extrinsic:
+        gamma: 0.99               # Reward_Role.TRAINER_GAMMA must match.
+        strength: 1.0
+
+    keep_checkpoints: 20
+    checkpoint_interval: 100000
+    max_steps: 16000000
+
+    # One whole play: (MAX_PHYSICS_TICKS 600 + PRESNAP_TICKS 20) / DECISION_PERIOD 5.
+    # Pinned by Systems_ContractTests.
+    time_horizon: 124
+
+    summary_freq: 50000
+    threaded: false               # deterministic ordering (UNITY_RULES section 2)
+
+  Defense:
+    <<: *football_brain
+    init_path: results/football_base29/Defense/Defense-1402336.pt  # WARM: base29 final
+
+  Quarterback:
+    <<: *football_brain
+    init_path: results/football_base29/Quarterback/Quarterback-128390.pt  # WARM: base29 final
+    trainer_type: ppo
+    max_steps: 1600000
+    checkpoint_interval: 10000
+    hyperparameters:
+      batch_size: 256
+      buffer_size: 2048
+      learning_rate: 3.0e-4
+      beta: 5.0e-2
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 5
+      learning_rate_schedule: constant
+      beta_schedule: constant
+      epsilon_schedule: constant
+
+  DefenseCall:
+    <<: *football_brain
+    init_path: results/football_base29/DefenseCall/DefenseCall-2675.pt  # WARM: base29 final
+    trainer_type: ppo
+    max_steps: 40000
+    checkpoint_interval: 1000
+    summary_freq: 1000
+    time_horizon: 8                 # every episode is one step
+    hyperparameters:
+      batch_size: 64
+      buffer_size: 640
+      learning_rate: 3.0e-4
+      beta: 5.0e-2
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 5
+      learning_rate_schedule: constant
+      beta_schedule: constant
+      epsilon_schedule: constant
+    network_settings:
+      normalize: false
+      hidden_units: 64
+      num_layers: 2
+      vis_encode_type: simple
+
+environment_parameters:
+  spot_lesson: 2.0                # FullGame; base26 graduated RunFit
+
+env_settings:
+  # --env, --num-envs and --base-port go on the command line (see the header).
+  # Record --num-envs in the run's MANIFEST.md; promote_brain.py does it for you.
+  seed: 1
+
+engine_settings:
+  time_scale: 20                  # physics stays at dt=0.02; this only speeds the clock
+  quality_level: 0
+  target_frame_rate: -1
+  capture_frame_rate: 60
+
+torch_settings:
+  device: cpu                     # Not sufficient alone: launch with
+                                  # CUDA_VISIBLE_DEVICES=-1 (see CLAUDE.md).
+
+checkpoint_settings:
+  results_dir: results
