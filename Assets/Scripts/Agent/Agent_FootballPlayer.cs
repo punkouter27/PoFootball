@@ -35,9 +35,11 @@ namespace PoFootball.Agents
         /// <summary>
         /// Physics tick the heuristic quarterback releases on. Late enough that the
         /// routes have separated, comfortably inside
-        /// Systems_SimConstants.THROW_WINDOW_TICKS.
+        /// Systems_SimConstants.THROW_WINDOW_TICKS. Twenty ticks after the call
+        /// latches, as it was when the latch was at 40: a fixed 60 would release
+        /// on the latch tick itself once DROPBACK_TICKS passed it (revision 18).
         /// </summary>
-        private const int THROW_AT_TICK = 60;
+        private const int THROW_AT_TICK = Systems_SimConstants.DROPBACK_TICKS + 20;
 
         /// <summary>
         /// Drive command at or beyond which a tick counts as saturated in the

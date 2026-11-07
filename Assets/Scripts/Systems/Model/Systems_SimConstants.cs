@@ -652,8 +652,18 @@ namespace PoFootball.Models
         /// gate still passes — but a brain fitted before this change latched on a
         /// different tick and is not interchangeable with one fitted after it, which
         /// is why Agent_ActionContract.CONTRACT_REVISION moves with it.
+        ///
+        /// 40 -> 75 (1.5 s), REVISION 18 (2026-11-07). Football_v04 threw a median
+        /// 1.0 s after the snap and never later than 1.7 s (Editor_PassDiagnostic,
+        /// results/audit/pass-diag-20261107-131517.csv: 39% within 0.1 s of the
+        /// latch), because the latch is also the first tick a pass is legal. A
+        /// rusher cannot get through the line in 0.8 s, so sacks were near zero
+        /// in every run and realism game, completions ran 0.69-0.77, and more
+        /// sack reward could not have changed that. 1.5 s is a real quick
+        /// three-step drop: the quick game survives, the rush gets a chance.
+        /// Still a multiple of DECISION_PERIOD, well inside THROW_WINDOW_TICKS.
         /// </summary>
-        public const int DROPBACK_TICKS = 40;
+        public const int DROPBACK_TICKS = 75;
 
         /// <summary>
         /// How far behind the line of scrimmage the quarterback retreats during

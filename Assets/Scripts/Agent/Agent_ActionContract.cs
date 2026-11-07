@@ -377,8 +377,18 @@ namespace PoFootball.Agents
         /// football_base24 can be promoted only from commit 5e53d25, revision 16.
         /// The scripted players drive the same controller, so the scripted game
         /// moved too and its realism must be re-measured on the four fixed seeds.
+        ///
+        /// Revision 18 (2026-11-07) moves the quarterback's call latch, and with it
+        /// the first legal throw, from 0.8 s to 1.5 s after the snap
+        /// (Systems_SimConstants.DROPBACK_TICKS 40 -> 75). Every shape is identical,
+        /// so only this number refuses a revision 17 brain: Football_v04 threw on
+        /// the latch, a median 1.0 s, before any rush could arrive, and a brain
+        /// fitted to that timing is not one fitted to this. Config/FootballBase31
+        /// .yaml warm-starts every brain from Football_v04's own checkpoints
+        /// (football_base28 at 100k). Revision 17 runs (football_base25-30) can be
+        /// promoted only from commit a48dc7b.
         /// </summary>
-        public const int CONTRACT_REVISION = 17;
+        public const int CONTRACT_REVISION = 18;
 
         /// <summary>
         /// Continuous outputs every brain has: forward and leftward velocity

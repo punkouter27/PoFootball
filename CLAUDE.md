@@ -87,7 +87,7 @@ Unity ML-Agents self-play.
 
 ```
 Assets/Agents/                 promoted brains: <Name>_v<NN>/{*.onnx, *_Character.asset, MANIFEST.md}
-                               — only Football_v03 (revision 16, refused); see below
+                               — Football_v03 (rev 16) and v04 (rev 17), both refused; see below
 Assets/Scripts/Agent/          Agent_*.cs      — Agent subclasses, action application
 Assets/Scripts/Sensor/         Sensor_*.cs     — observation collection
 Assets/Scripts/Reward/         Reward_*.cs     — reward terms
@@ -102,28 +102,30 @@ Config/archive/                configs for superseded contracts; they will NOT r
 results/<run-id>/MANIFEST.md   one per run — records --num-envs, which is part of the run's identity
 ```
 
-**Current state (2026-11-04). CONTRACT REVISION 17; NO BRAIN LOADS; every player
-runs `Heuristic`.** Revision 17 made the two continuous actions a VELOCITY (forward
-and leftward in the body's frame, at |command| × top speed), driven by
-`Agent_VelocityController`; `Agent_ActionContract` has the detail and
-[docs/CONTRACT_HISTORY.md](docs/CONTRACT_HISTORY.md) has every revision before it.
+**Current state (2026-11-07). CONTRACT REVISION 18; NO BRAIN LOADS; every player
+runs `Heuristic`.** Revision 18 moved the quarterback's call latch, and so the first
+legal throw, from 0.8 s to 1.5 s after the snap (`Systems_SimConstants.DROPBACK_TICKS`
+40 -> 75): Football_v04 threw a median 1.0 s after the snap, before any rush could
+arrive, so no run ever sacked anyone. `Agent_ActionContract` has the detail and
+[docs/CONTRACT_HISTORY.md](docs/CONTRACT_HISTORY.md) has the revisions before 17.
 
-- **`Config/FootballBase27.yaml` is the config to run** (run-id `football_base27`,
-  training 2026-11-05): every brain warm-started from base26's final checkpoint,
-  FullGame only, with the dropback no longer charged tick by tick
-  (`Reward_Progress.HoldsBaselineInBackfield`). base26's quarterback ran forward
-  from every snap to dodge that charge, crossed the line, and so never threw.
-  Its end-of-run realism check needs `--realism-in-editor` in
-  `Tools/run_unattended.py`: the batch-mode check stalls on the first play.
-- `Config/FootballBase26.yaml` (run-id `football_base26`, trained 2026-11-04/05):
-  all four brains FRESH, opening with the run-fit drill (`spot_lesson` 3) and
-  graduating to FullGame at a DefenseCall reward of 0.25 over 1000+ plays.
-  `football_base25` trained 2026-10-23/24 against the same contract, but its
-  `results/` are gone, as are base24's, so there is nothing to resume or warm-start.
+- **`Config/FootballBase31.yaml` is the config to run** (run-id `football_base31`):
+  every brain warm-started from Football_v04's own checkpoints (football_base28 at
+  100k), no reward change, so the realism line reads the latch alone.
+- **`Assets/Agents/Football_v04`** (football_base28 at 100k, revision 17) is in the
+  brain table and passed 4 of 5 realism bands (rush 2.29 yd/carry), but the stamp
+  refuses it in this revision 18 build. Revision 17's runs: base25-27 never threw;
+  base28 threw (v04); base29/30 charged the fouler his own flag (`Reward_Terminal
+  .OwnFouls`) and cut flags to ~3%, yet base30 FAILED realism at 2.4M and 4.3M
+  (`results/football_base30/MANIFEST.md`). Revision 17 is promotable only from
+  commit a48dc7b.
+- `Tools/run_unattended.py` now starts the trainer through a shim that re-enables
+  CTRL+C: base30, launched from an agent's shell, inherited "ignore CTRL+C", trained
+  4 h past a watcher HALT and was killed without exporting. Its end-of-run realism
+  check still needs the Editor (`--realism-in-editor`, or run
+  `Tools/checkpoint_realism.py --in-editor` afterwards).
 - **`Assets/Agents/Football_v03`** (from `football_base22`, revision 16) is on disk
-  and committed, is NOT in a brain table, FAILED the realism gate on all five bands
-  (passive Defense brain), and cannot load in a revision 17 build. v01 and v02 were
-  deleted on 2026-11-04 (refused by the stamp, both failed realism).
+  and committed, is NOT in a brain table and FAILED the realism gate on all five bands.
 - A run from an older revision is promoted only from the commit it was trained at;
   [docs/CONTRACT_HISTORY.md](docs/CONTRACT_HISTORY.md) names each one.
 
@@ -146,7 +148,7 @@ Note that `m_Model` references serialized in the scenes are dead either way:
 `Agent_BrainRegistry` at `Awake`, overwriting whatever the scene held.
 
 Heuristic-only is a supported, playable state, not a bug — but nothing you watch
-right now is a trained policy. **To change that, train and promote `football_base26`**
+right now is a trained policy. **To change that, train and promote `football_base31`**
 — see above.
 
 **QB CHALLENGE (2026-10-23)** — the one-player mode, from the menu's QB CHALLENGE
