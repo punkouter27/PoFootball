@@ -20,7 +20,7 @@
 # in this run. The rebuild failed on the Unity licence (access token expired).
 #
 # Launch (CUDA_VISIBLE_DEVICES=-1 is set by the runner):
-#   .venv\Scripts\python.exe Toolsun_unattended.py --run football_base30 `
+#   .venv\Scripts\python.exe Tools\run_unattended.py --run football_base30 `
 #     --config Config\FootballBase30.yaml --hours 8 --stall-after 1500000 --realism-last 0
 #
 # WHAT TO READ: Play/FlagRate under 0.06 and staying there, Play/SackRate off zero,
