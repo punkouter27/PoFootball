@@ -38,10 +38,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
-LEARN = REPO_ROOT / ".venv" / "Scripts" / "mlagents-learn.exe"
 ENV_EXE = REPO_ROOT / "Builds" / "FootballEnv" / "PoFootball.exe"
 STOP_FILE = REPO_ROOT / "STOP_TRAINING"
 BRAINS = ("Offense", "Defense", "Quarterback", "DefenseCall")
+
+# Re-enables CTRL+C in the trainer, whatever its parent ignored, then runs
+# mlagents-learn's own entry point (mlagents.trainers.learn:main).
+TRAINER_SHIM = ("import ctypes, sys; ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False); "
+                "sys.argv[0] = 'mlagents-learn'; from mlagents.trainers.learn import main; sys.exit(main())")
 
 CREATE_NEW_CONSOLE = 0x00000010
 STARTF_USESHOWWINDOW = 0x00000001
@@ -84,7 +88,11 @@ class Run:
 
     def start_trainer(self, resume: bool) -> None:
         env = dict(os.environ, CUDA_VISIBLE_DEVICES="-1", PYTHONUNBUFFERED="1")
-        command = [str(LEARN), self.args.config, f"--run-id={self.args.run}",
+        # mlagents-learn through TRAINER_SHIM, not mlagents-learn.exe: a process started from
+        # a shell that ignores CTRL+C inherits that, and football_base30 (launched by
+        # an agent's shell) ignored both the watcher's HALT and the deadline's CTRL+C,
+        # trained 4 h past the HALT, and was killed without exporting its brains.
+        command = [str(PYTHON), "-u", "-c", TRAINER_SHIM, self.args.config, f"--run-id={self.args.run}",
                    f"--env={ENV_EXE}", "--no-graphics",
                    f"--base-port={self.args.base_port}", f"--num-envs={self.args.num_envs}"]
         if resume:
@@ -146,6 +154,14 @@ class Run:
                 break
 
             if self.trainer.poll() is None:
+                if self.watcher.poll() == 1:
+                    # A HALT the trainer has not acted on within a minute: stop it
+                    # here (CTRL+C again, then kill after 10 min) rather than let it
+                    # train on past the rule that halted it.
+                    self.ended_by = "hack watcher HALT (see the watch log)"
+                    self.log("watcher HALTed but the trainer is still running; stopping it")
+                    self.stop_trainer_cleanly()
+                    break
                 if self.watcher.poll() not in (None, 1):
                     self.log(f"watcher exited {self.watcher.returncode}; restarting it")
                     self.start_watcher()
