@@ -1,0 +1,6 @@
+{
+  "buildMethod": "PoFootball.EditorTools.Editor_BuildWebGL.Build",
+  "staticWebApp": "pofootball",
+  "resourceGroup": "PoFootball",
+  "subscription": "14d963a2-badc-4a1f-9900-553bf01f8de2"
+}
