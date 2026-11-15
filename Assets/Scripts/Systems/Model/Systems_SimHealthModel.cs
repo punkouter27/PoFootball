@@ -1,5 +1,12 @@
 namespace PoFootball.Models
 {
+    public enum Systems_AppMode
+    {
+        Watch = 0,
+        Play = 1,
+        Testbed = 2,
+    }
+
     /// <summary>
     /// What the simulation knows about its own health, for the DEBUG sheet.
     ///
@@ -43,6 +50,17 @@ namespace PoFootball.Models
 
         /// <summary>Physics ticks the ball has been live this session.</summary>
         public int LiveTicks { get; private set; }
+
+        /// <summary>Count of non-finite (NaN/Inf) observation or action values sanitized this session.</summary>
+        public int NanInfCount { get; private set; }
+
+        /// <summary>Active viewer mode (Watch, Play, Testbed), cycled via F1.</summary>
+        public Systems_AppMode AppMode { get; set; } = Systems_AppMode.Watch;
+
+        /// <summary>When set via F4, toggles policy override visibility/hot-swap state.</summary>
+        public bool UseFallbackPolicy { get; set; }
+
+        public void CountNanInf() => NanInfCount++;
 
         public int ScrimmagePlays { get; private set; }
 

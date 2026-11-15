@@ -48,6 +48,7 @@ namespace PoFootball.Views
         private InputAction _toggleDebug;
         private InputAction _back;
         private Systems_StatusHudView _statusHud;
+        private Systems_BroadcastCameraView _cameraView;
 
         private void Awake()
         {
@@ -100,6 +101,71 @@ namespace PoFootball.Views
             if (_statusHud != null)
             {
                 _statusHud.RouteBack();
+            }
+        }
+
+        private void Update()
+        {
+            Keyboard kb = Keyboard.current;
+            if (kb == null)
+            {
+                return;
+            }
+
+            if (_cameraView == null)
+            {
+                _cameraView = FindAnyObjectByType<Systems_BroadcastCameraView>();
+            }
+
+            Models.Systems_SimHealthModel health = _statusHud != null ? _statusHud.Health : null;
+
+            if (kb.f1Key.wasPressedThisFrame && health != null)
+            {
+                health.AppMode = (Models.Systems_AppMode)(((int)health.AppMode + 1) % 3);
+            }
+
+            if (kb.f2Key.wasPressedThisFrame && _cameraView != null)
+            {
+                _cameraView.CycleCameraMode();
+            }
+
+            if (kb.f3Key.wasPressedThisFrame && _statusHud != null)
+            {
+                _statusHud.ToggleDebugSheet();
+            }
+
+            if (kb.f4Key.wasPressedThisFrame && health != null)
+            {
+                health.UseFallbackPolicy = !health.UseFallbackPolicy;
+            }
+
+            if (kb.spaceKey.wasPressedThisFrame)
+            {
+                Time.timeScale = Time.timeScale > 0f ? 0f : 1f;
+            }
+
+            if (kb.rKey.wasPressedThisFrame)
+            {
+                Time.timeScale = 1f;
+                var active = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                if (active.IsValid())
+                {
+                    UnityEngine.SceneManagement.SceneManager.LoadScene(active.name);
+                }
+            }
+
+            if (_cameraView != null && _cameraView.CameraMode == Systems_CameraMode.Free)
+            {
+                float step = 12f * Mathf.Max(Time.unscaledDeltaTime, 0.005f);
+                Vector2 delta = Vector2.zero;
+                if (kb.wKey.isPressed || kb.upArrowKey.isPressed) delta.y += step;
+                if (kb.sKey.isPressed || kb.downArrowKey.isPressed) delta.y -= step;
+                if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) delta.x += step;
+                if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) delta.x -= step;
+                if (delta != Vector2.zero)
+                {
+                    _cameraView.AddFreePan(delta);
+                }
             }
         }
     }

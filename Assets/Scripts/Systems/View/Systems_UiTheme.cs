@@ -76,6 +76,9 @@ namespace PoFootball.Views
         public static readonly Color Action = new Color(0.949f, 0.969f, 0.953f, 1f);
 
         public static readonly Color Positive = new Color(0.353f, 0.812f, 0.482f, 1f);
+        public static readonly Color PolicyBot = AwayColor;
+        public static readonly Color PolicyRef = Positive;
+        public static readonly Color PolicyCustom = HomeColor;
 
         /// <summary>
         /// Bad news — a turnover, a safety.

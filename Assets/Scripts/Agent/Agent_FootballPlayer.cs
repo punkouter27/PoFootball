@@ -756,7 +756,30 @@ namespace PoFootball.Agents
                 hasPlay ? _play.Kind : Systems_PlayKind.Scrimmage,
                 hasPlay && _play.Phase == Systems_PlayPhase.PreSnap);
 
+            for (int i = 0; i < _observationBuffer.Length; i++)
+            {
+                if (!float.IsFinite(_observationBuffer[i]))
+                {
+                    _observationBuffer[i] = 0f;
+                    _health?.CountNanInf();
+                }
+            }
+
             sensor.AddObservation(_observationBuffer);
+        }
+
+        /// <summary>Appends zero-initialized trailing observation inputs without reordering existing indices.</summary>
+        public static void AppendZeroInitObservations(VectorSensor sensor, float[] baseObs, int zeroTailCount)
+        {
+            if (baseObs != null)
+            {
+                sensor.AddObservation(baseObs);
+            }
+
+            for (int i = 0; i < zeroTailCount; i++)
+            {
+                sensor.AddObservation(0f);
+            }
         }
 
         /// <summary>
@@ -882,11 +905,16 @@ namespace PoFootball.Agents
 
             ActionSegment<float> continuous = actions.ContinuousActions;
 
+            float cx = continuous[0];
+            float cy = continuous[1];
+            if (!float.IsFinite(cx)) { cx = 0f; _health?.CountNanInf(); }
+            if (!float.IsFinite(cy)) { cy = 0f; _health?.CountNanInf(); }
+
             // REVISION 17: A VELOCITY, NOT A THROTTLE AND A TORQUE. Forward and
             // leftward in the frame the observations were written in, resolved into
             // the same drive and torque as ever. See Agent_VelocityController.
             Vector2 command = new Vector2(
-                Mathf.Clamp(continuous[0], -1f, 1f), Mathf.Clamp(continuous[1], -1f, 1f));
+                Mathf.Clamp(cx, -1f, 1f), Mathf.Clamp(cy, -1f, 1f));
 
             Agent_VelocityController.Resolve(
                 command, _commandFrameUp, Facing, Velocity, _topSpeed,

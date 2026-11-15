@@ -7,6 +7,14 @@ using VContainer;
 
 namespace PoFootball.Views
 {
+    public enum Systems_CameraMode
+    {
+        Broadcast = 0,
+        Follow = 1,
+        Orbit = 2,
+        Free = 3,
+    }
+
     /// <summary>
     /// Turns the fixed overhead shot into a camera operator: it follows the ball,
     /// tightens on the snap, and pulls wide when a run breaks.
@@ -394,6 +402,34 @@ namespace PoFootball.Views
         /// </summary>
         public Systems_ShotKind CurrentShot => _director.Current;
 
+        public Systems_CameraMode CameraMode { get; private set; } = Systems_CameraMode.Broadcast;
+        private Vector2 _freeOffset;
+
+        public void SetCameraMode(Systems_CameraMode mode)
+        {
+            CameraMode = mode;
+            if (mode == Systems_CameraMode.Broadcast)
+            {
+                _freeOffset = Vector2.zero;
+            }
+        }
+
+        public Systems_CameraMode CycleCameraMode()
+        {
+            SetCameraMode((Systems_CameraMode)(((int)CameraMode + 1) % 4));
+            return CameraMode;
+        }
+
+        public void AddFreePan(Vector2 delta)
+        {
+            if (CameraMode != Systems_CameraMode.Free)
+            {
+                CameraMode = Systems_CameraMode.Free;
+            }
+
+            _freeOffset += delta;
+        }
+
         [Inject]
         public void Construct(
             Systems_BallModel ball,
@@ -472,6 +508,21 @@ namespace PoFootball.Views
             }
 
             ApplySpectator(ref target, ref targetSize);
+
+            if (CameraMode == Systems_CameraMode.Follow && carrier != null)
+            {
+                target = carrier.Position;
+                targetSize = Mathf.Min(targetSize, TightSize());
+            }
+            else if (CameraMode == Systems_CameraMode.Orbit)
+            {
+                float angle = Time.unscaledTime * 0.45f;
+                target += new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * 6f;
+            }
+            else if (CameraMode == Systems_CameraMode.Free)
+            {
+                target += _freeOffset;
+            }
 
             MoveShot(target, targetSize, deltaTime);
         }

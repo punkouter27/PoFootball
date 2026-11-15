@@ -307,6 +307,7 @@ namespace PoFootball.Views
         /// simulation: the sheet then carries the frame and device findings alone.
         /// </summary>
         private Systems_SimHealthModel _health;
+        internal Systems_SimHealthModel Health => _health;
 
         /// <summary>
         /// Called by <see cref="Systems_StatusHudBootstrap"/> in a scene with a game
@@ -1250,6 +1251,10 @@ namespace PoFootball.Views
             builder.Append(_health.SpeedClampHits);
             builder.Append("   |   seed ");
             builder.Append(Systems_EpisodeSeed.Value);
+            builder.Append("   |   mode ");
+            builder.Append(_health.AppMode);
+            builder.Append("   |   nan/inf ");
+            builder.Append(_health.NanInfCount);
             builder.Append('\n');
 
             double load = _health.DriveLoad + _health.SteerLoad + _health.ContactLoad;
