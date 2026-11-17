@@ -1,0 +1,26 @@
+{
+    "stamp": "2026-11-17 14:21:08",
+    "version": "1.0.0",
+    "width": 540,
+    "height": 960,
+    "liveVcamName": "BroadcastLiveVCam",
+    "highlightVcamName": "BroadcastHighlightVCam",
+    "surroundShaderName": "Shader Graphs/PoFootball_FieldSurround",
+    "separationBurstAllocated": true,
+    "weatherUsingVfxGraph": false,
+    "liveOrthoSize": 14.516948699951172,
+    "liveShotKind": "Pocket",
+    "stills": [
+        "01_separation_cinemachine.png",
+        "02_pursuit_surround.png",
+        "03_weather_night_rain.png",
+        "04_debug_telemetry.png",
+        "05_highlight_vcam.png"
+    ],
+    "bursts": [
+        "burst_dropback",
+        "burst_pursuit",
+        "burst_weather",
+        "burst_highlight"
+    ]
+}

@@ -42,6 +42,7 @@ namespace PoFootball.Views
     public sealed class Systems_FieldRenderer : MonoBehaviour, Systems_IInjectableView
     {
         private const string TURF_MATERIAL_RESOURCE = "M_PoFootballTurf";
+        private const string SURROUND_MATERIAL_RESOURCE = "M_PoFootballSurround";
 
         /// <summary>Name of the ground quad built behind the pitch at runtime.</summary>
         private const string SURROUND_NAME = "FieldSurround";
@@ -67,6 +68,9 @@ namespace PoFootball.Views
 
         /// <summary>Made at runtime for the surround, so it is this component's to destroy.</summary>
         private Material _surroundMaterial;
+        private string _surroundShaderName = "none";
+
+        internal string SurroundShaderName => _surroundShaderName;
 
         /// <summary>Name of the legacy marking parent under the field root.</summary>
         private const string LEGACY_LINES_NODE = "Lines";
@@ -264,12 +268,23 @@ namespace PoFootball.Views
             SpriteRenderer surroundRenderer = surround.AddComponent<SpriteRenderer>();
             surroundRenderer.sprite = _renderer.sprite;
 
-            Shader unlit = Shader.Find(UNLIT_SPRITE_SHADER);
+            Material surroundAsset = Resources.Load<Material>(SURROUND_MATERIAL_RESOURCE);
 
-            if (unlit != null)
+            if (surroundAsset != null)
             {
-                _surroundMaterial = new Material(unlit) { name = SURROUND_NAME };
-                surroundRenderer.sharedMaterial = _surroundMaterial;
+                surroundRenderer.sharedMaterial = surroundAsset;
+                _surroundShaderName = surroundAsset.shader != null ? surroundAsset.shader.name : "null";
+            }
+            else
+            {
+                Shader unlit = Shader.Find(UNLIT_SPRITE_SHADER);
+
+                if (unlit != null)
+                {
+                    _surroundMaterial = new Material(unlit) { name = SURROUND_NAME };
+                    surroundRenderer.sharedMaterial = _surroundMaterial;
+                    _surroundShaderName = unlit.name;
+                }
             }
 
             surroundRenderer.color = SurroundColor;

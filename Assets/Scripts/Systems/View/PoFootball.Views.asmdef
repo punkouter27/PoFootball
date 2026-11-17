@@ -10,11 +10,13 @@
         "UniTask",
         "Unity.Mathematics",
         "Unity.Burst",
+        "Unity.Cinemachine",
         "Unity.Collections",
         "Unity.InputSystem",
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.RenderPipelines.Universal.2D.Runtime",
-        "Unity.RenderPipelines.Core.Runtime"
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.VisualEffectGraph.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

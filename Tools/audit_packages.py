@@ -92,6 +92,7 @@ def classify_packages(usings: set[str]) -> tuple[list[dict], list[dict]]:
         "com.unity.test-framework": ["UnityEngine.TestTools", "NUnit.Framework"],
         "com.unity.timeline": ["UnityEngine.Timeline"],
         "com.unity.ugui": ["UnityEngine.UI"],
+        "com.unity.visualeffectgraph": ["UnityEngine.VFX"],
         "com.unity.visualscripting": ["Unity.VisualScripting"],
         "com.ivanmurzak.unity.mcp": ["com.IvanMurzak"],
         "com.coplaydev.unity-mcp": ["com.CoplayDev"],
@@ -140,6 +141,7 @@ def classify_packages(usings: set[str]) -> tuple[list[dict], list[dict]]:
             # by CLAUDE.md" list, mark it keep regardless.
             UNCONDITIONAL_KEEP = {
                 "com.unity.render-pipelines.universal",  # URP, per CLAUDE.md
+                "com.unity.shadergraph",                  # authored via .shadergraph assets, not C# usings
                 "com.unity.ml-agents",                    # core, per CLAUDE.md
                 "com.unity.inputsystem",                  # NON-NEGOTIABLE per architecture rules
                 "com.unity.test-framework",               # used by tests

@@ -56,6 +56,16 @@ namespace PoFootball.EditorTools
                 BuildOptions.None);
         }
 
+        /// <summary>Builds a development Windows player for CLI launch and live feature capture.</summary>
+        public static void BuildGameDevelopmentHeadless()
+        {
+            Build(
+                "Game (Development)",
+                new[] { MENU_SCENE, GAME_SCENE },
+                GAME_OUTPUT,
+                BuildOptions.Development);
+        }
+
         /// <summary>
         /// The training env, from a command line.
         ///

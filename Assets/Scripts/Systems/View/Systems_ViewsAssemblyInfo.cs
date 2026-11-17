@@ -7,5 +7,6 @@ using System.Runtime.CompilerServices;
 // The same reasoning as Agent_AssemblyInfo: a test or an Editor tool is the same
 // code, checked, not a consumer that justifies widening a type to public.
 // Assembly-CSharp-Editor is Assets/Editor/, which has no asmdef of its own.
+[assembly: InternalsVisibleTo("PoFootball.Tests.EditMode")]
 [assembly: InternalsVisibleTo("PoFootball.Tests.PlayMode")]
 [assembly: InternalsVisibleTo("Assembly-CSharp-Editor")]

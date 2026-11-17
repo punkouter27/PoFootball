@@ -2,6 +2,7 @@ using System;
 using MessagePipe;
 using PoFootball.Models;
 using PoFootball.Systems;
+using Unity.Cinemachine;
 using UnityEngine;
 using VContainer;
 
@@ -17,14 +18,17 @@ namespace PoFootball.Views
 
     /// <summary>
     /// Turns the fixed overhead shot into a camera operator: it follows the ball,
-    /// tightens on the snap, and pulls wide when a run breaks.
+    /// tightens on the snap, and pulls wide when a run breaks, routed through
+    /// Cinemachine (<see cref="CinemachineBrain"/> + live/highlight
+    /// <see cref="CinemachineCamera"/> rigs) when <see cref="Systems_PresentationBudget"/>
+    /// enables effects.
     ///
-    /// WHY NOT CINEMACHINE. The package was installed, so this was a real choice
-    /// rather than an omission — and since nothing ever referenced it, it has
-    /// since been removed from the manifest. Both behaviours here are bespoke — the zoom is a function of yards gained past
-    /// the line of scrimmage, and the framing has to stay inside a 120-yard field
-    /// on a 9:16 screen. Wiring that into CinemachineCamera plus a follow component
-    /// is more moving parts than the sixty lines of damping it replaces.
+    /// HYBRID CINEMACHINE ARCHITECTURE. Framing targets, aspect-safe ortho sizes
+    /// (9:16 through 21:9), downfield/lateral leads, threat pull, and field clamping
+    /// stay deterministic in this operator; Cinemachine owns the virtual camera
+    /// rigs (live play vs. highlight reel) and smooth cross-camera blending via
+    /// manual late-update evaluation so downstream views in the same frame always
+    /// read a settled camera transform and orthographic size.
     ///
     /// WHAT WAS REMOVED, AND WHY. This used to also kick on a big hit and drop into
     /// slow motion for a touchdown. The slow motion drove Time.timeScale, which is
@@ -374,6 +378,11 @@ namespace PoFootball.Views
 
         private Camera _camera;
         private Transform _transform;
+        private CinemachineBrain _cinemachineBrain;
+        private GameObject _cinemachineRigHost;
+        private CinemachineCamera _liveVirtualCamera;
+        private CinemachineCamera _highlightVirtualCamera;
+        private bool _ownsBrain;
 
         private float _homeZ;
 
@@ -401,6 +410,11 @@ namespace PoFootball.Views
         /// highlight has the shot.
         /// </summary>
         public Systems_ShotKind CurrentShot => _director.Current;
+
+        internal string ActiveCinemachineName =>
+            _cinemachineBrain != null && _cinemachineBrain.ActiveVirtualCamera != null
+                ? _cinemachineBrain.ActiveVirtualCamera.Name
+                : "none";
 
         public Systems_CameraMode CameraMode { get; private set; } = Systems_CameraMode.Broadcast;
         private Vector2 _freeOffset;
@@ -466,6 +480,8 @@ namespace PoFootball.Views
                 return;
             }
 
+            BuildCinemachineRig();
+
             _snappedSubscription = _snappedSubscriber?.Subscribe(OnSnapped);
             _thrownSubscription = _thrownSubscriber?.Subscribe(OnPassThrown);
             _highlightSubscription = _highlightSubscriber?.Subscribe(OnHighlightPlayback);
@@ -476,6 +492,16 @@ namespace PoFootball.Views
             _snappedSubscription?.Dispose();
             _thrownSubscription?.Dispose();
             _highlightSubscription?.Dispose();
+
+            if (_cinemachineRigHost != null)
+            {
+                Destroy(_cinemachineRigHost);
+            }
+
+            if (_ownsBrain && _cinemachineBrain != null)
+            {
+                Destroy(_cinemachineBrain);
+            }
         }
 
         /// <summary>
@@ -584,6 +610,97 @@ namespace PoFootball.Views
             targetSize = Mathf.Max(MIN_MANUAL_SIZE, targetSize * _spectator.ZoomScale);
         }
 
+        private void BuildCinemachineRig()
+        {
+            _cinemachineBrain = GetComponent<CinemachineBrain>();
+
+            if (_cinemachineBrain == null)
+            {
+                _cinemachineBrain = gameObject.AddComponent<CinemachineBrain>();
+                _ownsBrain = true;
+            }
+
+            _cinemachineBrain.UpdateMethod = CinemachineBrain.UpdateMethods.ManualUpdate;
+            _cinemachineBrain.BlendUpdateMethod = CinemachineBrain.BrainUpdateMethods.LateUpdate;
+            _cinemachineBrain.IgnoreTimeScale = true;
+            _cinemachineBrain.LensModeOverride = new CinemachineBrain.LensModeOverrideSettings
+            {
+                Enabled = true,
+                DefaultMode = LensSettings.OverrideModes.Orthographic
+            };
+            _cinemachineBrain.DefaultBlend =
+                new CinemachineBlendDefinition(CinemachineBlendDefinition.Styles.EaseInOut, 0.35f);
+
+            _cinemachineRigHost = new GameObject("CinemachineRig");
+            _cinemachineRigHost.transform.SetPositionAndRotation(
+                _transform.position, _transform.rotation);
+
+            _liveVirtualCamera = CreateVirtualCamera("BroadcastLiveVCam", 10);
+            _highlightVirtualCamera = CreateVirtualCamera("BroadcastHighlightVCam", 0);
+        }
+
+        private CinemachineCamera CreateVirtualCamera(string vcamName, int priority)
+        {
+            GameObject host = new GameObject(vcamName);
+            host.transform.SetParent(_cinemachineRigHost.transform, false);
+
+            CinemachineCamera vcam = host.AddComponent<CinemachineCamera>();
+            vcam.Priority = priority;
+            vcam.Lens = new LensSettings
+            {
+                ModeOverride = LensSettings.OverrideModes.Orthographic,
+                OrthographicSize = _camera.orthographicSize,
+                NearClipPlane = _camera.nearClipPlane,
+                FarClipPlane = _camera.farClipPlane,
+                FieldOfView = _camera.fieldOfView,
+            };
+
+            return vcam;
+        }
+
+        private void ApplyShotState(
+            Vector2 position,
+            float orthographicSize,
+            bool isHighlight,
+            bool cut,
+            float deltaTime)
+        {
+            Vector3 worldPosition = new Vector3(position.x, position.y, _homeZ);
+
+            if (_cinemachineBrain == null || _liveVirtualCamera == null || _highlightVirtualCamera == null)
+            {
+                _camera.orthographicSize = orthographicSize;
+                _transform.position = worldPosition;
+                return;
+            }
+
+            _liveVirtualCamera.Priority = isHighlight ? 0 : 10;
+            _highlightVirtualCamera.Priority = isHighlight ? 20 : 0;
+
+            CinemachineCamera active = isHighlight ? _highlightVirtualCamera : _liveVirtualCamera;
+            active.transform.position = worldPosition;
+
+            LensSettings lens = active.Lens;
+            lens.ModeOverride = LensSettings.OverrideModes.Orthographic;
+            lens.OrthographicSize = orthographicSize;
+            active.Lens = lens;
+
+            if (cut)
+            {
+                active.PreviousStateIsValid = false;
+            }
+
+            _cinemachineBrain.ManualUpdate(Time.frameCount, cut ? 0f : Mathf.Max(deltaTime, 0f));
+
+            // Keep the authoritative camera transform/size aligned in case Cinemachine
+            // skipped evaluation on frame 0 or during an instant cut.
+            if (cut)
+            {
+                _camera.orthographicSize = orthographicSize;
+                _transform.position = worldPosition;
+            }
+        }
+
         /// <summary>
         /// Eases the shot toward a target and a size, and holds it on the field.
         /// The one place the camera's transform and size are written outside a
@@ -598,15 +715,14 @@ namespace PoFootball.Views
             float positionBlend = 1f - Mathf.Exp(-_positionDamping * deltaTime);
             float zoomBlend = 1f - Mathf.Exp(-_zoomDamping * deltaTime);
 
-            _camera.orthographicSize = Mathf.Lerp(
-                _camera.orthographicSize, targetSize, zoomBlend);
+            float nextSize = Mathf.Lerp(_camera.orthographicSize, targetSize, zoomBlend);
 
             Vector3 current = _transform.position;
             Vector2 eased = Vector2.Lerp(new Vector2(current.x, current.y), target, positionBlend);
 
-            eased = ClampToField(eased, _camera.orthographicSize);
+            eased = ClampToField(eased, nextSize);
 
-            _transform.position = new Vector3(eased.x, eased.y, _homeZ);
+            ApplyShotState(eased, nextSize, _highlightPlaying, false, deltaTime);
         }
 
         /// <summary>
@@ -632,10 +748,8 @@ namespace PoFootball.Views
             if (_highlightCut)
             {
                 _highlightCut = false;
-                _camera.orthographicSize = targetSize;
-
                 Vector2 spot = ClampToField(HighlightTarget(focus, targetSize), targetSize);
-                _transform.position = new Vector3(spot.x, spot.y, _homeZ);
+                ApplyShotState(spot, targetSize, true, true, 0f);
                 return;
             }
 
@@ -1323,7 +1437,6 @@ namespace PoFootball.Views
             // a spot change would send the camera sailing sixty yards down the
             // field between plays.
             float tight = TightSize();
-            _camera.orthographicSize = tight;
 
             // Same downfield lead the steady-state framing uses, or the shot would
             // cut to the line of scrimmage and then immediately drift upfield by the
@@ -1332,7 +1445,7 @@ namespace PoFootball.Views
                 new Vector2(0f, message.LineOfScrimmageY + (tight * DOWNFIELD_LEAD)),
                 tight);
 
-            _transform.position = new Vector3(spot.x, spot.y, _homeZ);
+            ApplyShotState(spot, tight, false, true, 0f);
         }
     }
 }

@@ -1,6 +1,7 @@
 using PoFootball.Models;
 using PoFootball.Systems;
 using UnityEngine;
+using UnityEngine.VFX;
 using VContainer;
 
 namespace PoFootball.Views
@@ -113,8 +114,18 @@ namespace PoFootball.Views
         /// <summary>Side of the generated flake texture, pixels.</summary>
         private const int FLAKE_TEXTURE_SIZE = 32;
 
+        private const string VFX_WEATHER_RESOURCE = "VFX_WeatherPrecipitation";
+        private const string VFX_SPAWN_RATE = "SpawnRate";
+        private const string VFX_BOX_SIZE = "BoxSize";
+        private const string VFX_WIND_VELOCITY = "WindVelocity";
+        private const string VFX_PARTICLE_COLOR = "ParticleColor";
+
         private ParticleSystem _precipitation;
         private Transform _precipitationTransform;
+        private VisualEffect _vfxPrecipitation;
+        private bool _usingVfxGraph;
+
+        internal bool IsUsingVfxGraph => _usingVfxGraph;
 
         private Mesh _hazeMesh;
         private MeshRenderer _hazeRenderer;
@@ -167,10 +178,50 @@ namespace PoFootball.Views
             }
 
             BuildPrecipitation();
+            TryBuildVfxPrecipitation();
             BuildHaze();
             BuildDusting();
 
             _weatherSystem.Begin(Systems_BroadcastSettings.LiveWeather);
+        }
+
+        /// <summary>
+        /// Uses VFX Graph GPU precipitation on compute-capable platforms when a
+        /// weather VisualEffectAsset with matching blackboard parameters is present;
+        /// falls back to the CPU ParticleSystem on WebGL and non-compute devices.
+        /// </summary>
+        private void TryBuildVfxPrecipitation()
+        {
+            if (!SystemInfo.supportsComputeShaders || Application.platform == RuntimePlatform.WebGLPlayer)
+            {
+                return;
+            }
+
+            VisualEffectAsset asset = Resources.Load<VisualEffectAsset>(VFX_WEATHER_RESOURCE);
+
+            if (asset == null)
+            {
+                return;
+            }
+
+            GameObject host = new GameObject("WeatherPrecipitationVFX");
+            host.transform.SetParent(transform, false);
+
+            VisualEffect vfx = host.AddComponent<VisualEffect>();
+            vfx.visualEffectAsset = asset;
+
+            if (!vfx.HasFloat(VFX_SPAWN_RATE)
+                || !vfx.HasVector3(VFX_BOX_SIZE)
+                || !vfx.HasVector3(VFX_WIND_VELOCITY))
+            {
+                Destroy(host);
+                return;
+            }
+
+            vfx.Stop();
+            _vfxPrecipitation = vfx;
+            _usingVfxGraph = true;
+            _precipitationTransform = host.transform;
         }
 
         /// <summary>
@@ -424,12 +475,19 @@ namespace PoFootball.Views
             Vector2 windDrift = WindVector(_weather.WindFromDegrees) * (_weather.WindSpeedKmh / 3.6f);
 
             _precipitation.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            if (_usingVfxGraph && _vfxPrecipitation != null)
+            {
+                _vfxPrecipitation.Stop();
+            }
+
             ParticleSystemRenderer renderer = _precipitation.GetComponent<ParticleSystemRenderer>();
             ParticleSystem.MainModule main = _precipitation.main;
             ParticleSystem.VelocityOverLifetimeModule velocity = _precipitation.velocityOverLifetime;
             ParticleSystem.NoiseModule noise = _precipitation.noise;
 
             _density = 0f;
+            Vector2 vfxDrift = Vector2.zero;
+            Color vfxColor = Color.white;
 
             switch (_condition)
             {
@@ -440,6 +498,8 @@ namespace PoFootball.Views
                     main.startColor = RainColor;
 
                     Vector2 drift = windDrift * RAIN_WIND_DRIFT;
+                    vfxDrift = new Vector2(drift.x, drift.y - RAIN_FALL_SPEED);
+                    vfxColor = RainColor;
                     velocity.x = new ParticleSystem.MinMaxCurve(drift.x);
                     velocity.y = new ParticleSystem.MinMaxCurve(drift.y - RAIN_FALL_SPEED);
                     velocity.z = new ParticleSystem.MinMaxCurve(0f);
@@ -463,6 +523,8 @@ namespace PoFootball.Views
                     main.startColor = SnowColor;
 
                     Vector2 drift = windDrift * SNOW_WIND_DRIFT;
+                    vfxDrift = new Vector2(drift.x, drift.y - SNOW_FALL_SPEED);
+                    vfxColor = SnowColor;
                     velocity.x = new ParticleSystem.MinMaxCurve(drift.x);
                     velocity.y = new ParticleSystem.MinMaxCurve(drift.y - SNOW_FALL_SPEED);
                     velocity.z = new ParticleSystem.MinMaxCurve(0f);
@@ -498,7 +560,19 @@ namespace PoFootball.Views
 
             if (_density > 0f)
             {
-                _precipitation.Play();
+                if (_usingVfxGraph && _vfxPrecipitation != null)
+                {
+                    _vfxPrecipitation.SetVector3(VFX_WIND_VELOCITY, new Vector3(vfxDrift.x, vfxDrift.y, 0f));
+                    if (_vfxPrecipitation.HasVector4(VFX_PARTICLE_COLOR))
+                    {
+                        _vfxPrecipitation.SetVector4(VFX_PARTICLE_COLOR, vfxColor);
+                    }
+                    _vfxPrecipitation.Play();
+                }
+                else
+                {
+                    _precipitation.Play();
+                }
             }
         }
 
@@ -522,12 +596,21 @@ namespace PoFootball.Views
                 return;
             }
 
+            float spawnRate = _density * width * height;
+
+            if (_usingVfxGraph && _vfxPrecipitation != null)
+            {
+                _vfxPrecipitation.SetVector3(VFX_BOX_SIZE, new Vector3(width, height, 0.1f));
+                _vfxPrecipitation.SetFloat(VFX_SPAWN_RATE, spawnRate);
+                return;
+            }
+
             ParticleSystem.ShapeModule shape = _precipitation.shape;
             shape.scale = new Vector3(width, height, 0f);
 
             ParticleSystem.EmissionModule emission = _precipitation.emission;
             emission.enabled = true;
-            emission.rateOverTimeMultiplier = _density * width * height;
+            emission.rateOverTimeMultiplier = spawnRate;
         }
 
         private void SetHaze(Color color, float edgeAlpha, float centreAlpha)

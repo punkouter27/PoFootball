@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoFootball — New Features Showcase</title>
+<style>
+  :root {
+    --bg: #0b0f0d;
+    --surface: #141a16;
+    --surface-2: #1b241e;
+    --text: #f2f7f3;
+    --muted: #9aa89f;
+    --accent: #fbc938;
+    --cyan: #38bdf8;
+    --green: #4ade80;
+    --coral: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 28px 18px 72px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: 0.3px; }
+  h2 { font-size: 20px; margin: 38px 0 12px; color: var(--accent); border-bottom: 1px solid #26302a; padding-bottom: 6px; }
+  p, li { color: var(--muted); }
+  code { color: var(--text); background: #1e2721; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 22px; }
+  .pill { background: var(--surface-2); border: 1px solid #2b3830; border-radius: 999px; padding: 4px 12px; font-size: 13px; color: var(--text); }
+  .pill b { color: var(--accent); }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  figure { margin: 0; background: var(--surface); border: 1px solid #222c26; border-radius: 12px; padding: 12px; }
+  figure img { width: 100%; border-radius: 8px; display: block; }
+  figcaption { margin-top: 10px; color: var(--text); font-size: 14px; }
+  figcaption p { margin: 4px 0 0; font-size: 13px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 7px; border-radius: 4px; margin-right: 6px; }
+  .t-cm { background: rgba(56,189,248,.16); color: var(--cyan); }
+  .t-burst { background: rgba(74,222,128,.16); color: var(--green); }
+  .t-sg { background: rgba(251,201,56,.16); color: var(--accent); }
+  .t-phys { background: rgba(248,113,113,.16); color: var(--coral); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; background: var(--surface); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #222c26; vertical-align: top; }
+  th { color: var(--accent); background: var(--surface-2); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PoFootball — New Unity Integrations &amp; Gameplay Showcase</h1>
+  <p>Captured live from <code>Builds/Game/PoFootball.exe</code> (D3D12, NVIDIA GeForce RTX 2060, 540&times;960 portrait, 2026-11-17 14:21:08, app v1.0.0). EditMode: <b>413/413 passed</b>. Presentation cost measured on-device: <b>0.32 ms/frame</b> at 60 FPS.</p>
+
+  <div class="pills">
+    <span class="pill"><b>#11 Cinemachine 6.6.0</b> BroadcastLiveVCam &rarr; BroadcastHighlightVCam</span>
+    <span class="pill"><b>#9 Shader Graph 17.6.0</b> Shader Graphs/PoFootball_FieldSurround</span>
+    <span class="pill"><b>#8 VFX Graph 17.6.0</b> Compute-gated + ParticleSystem fallback</span>
+    <span class="pill"><b>#16 Burst 2.0.0</b> Systems_SeparationJob (true)</span>
+    <span class="pill"><b>#18 Physics2D</b> Rev 18 Combine Audit &amp; Realism</span>
+  </div>
+
+  <h2>Animated Gameplay Loops (Live Runs from PoFootball.exe)</h2>
+  <p>Each GIF is assembled from 22 consecutive rendered frames at ~11 FPS directly from live gameplay.</p>
+  <div class="grid-4">
+    <figure>
+      <img src="new_features/gif_01_dropback_separation.gif" alt="Dropback and Burst Separation">
+      <figcaption><span class="tag t-burst">Burst</span><span class="tag t-cm">Cinemachine</span><b>Pass Dropback &amp; Separation</b>
+      <p>Pocket camera framing (<code>BroadcastLiveVCam</code>) with live green/coral receiver separation dial gauges computed in <code>Systems_SeparationJob</code>.</p></figcaption>
+    </figure>
+    <figure>
+      <img src="new_features/gif_02_pursuit_breakaway.gif" alt="Pursuit and Breakaway">
+      <figcaption><span class="tag t-burst">Burst</span><span class="tag t-cm">Cinemachine</span><b>68-Yd Breakaway &amp; Pursuit</b>
+      <p>Closed-form intercept math ranks the top 3 defenders and draws their live intercept X markers while Cinemachine opens the ortho lens.</p></figcaption>
+    </figure>
+    <figure>
+      <img src="new_features/gif_03_weather_night_rain.gif" alt="Night Rain Weather">
+      <figcaption><span class="tag t-sg">Shader Graph</span><b>Night Rain &amp; Field Surround</b>
+      <p>Diagonal wind-driven rain streaks, night stadium floodlights, and the <code>PoFootball_FieldSurround</code> Shader Graph apron past the end zone.</p></figcaption>
+    </figure>
+    <figure>
+      <img src="new_features/gif_04_highlight_vcam.gif" alt="Highlight VCam Blend">
+      <figcaption><span class="tag t-cm">Cinemachine</span><b>Post-Game Highlight Blend</b>
+      <p><code>CinemachineBrain</code> blends smoothly to <code>BroadcastHighlightVCam</code> (Priority 20) as the replay ghost ball retraces the 68-yard TD.</p></figcaption>
+    </figure>
+  </div>
+
+  <h2>Annotated Feature Breakdown</h2>
+  <div class="grid-2">
+    <figure>
+      <img src="new_features/annotated_01_separation_cinemachine.png" alt="Annotated Dropback Separation and Cinemachine">
+      <figcaption><span class="tag t-cm">#11 Cinemachine</span><span class="tag t-burst">#16 Burst</span><b>Hybrid Cinemachine Rig + Burst Separation Rings</b>
+      <p><code>Systems_BroadcastCameraView</code> runs <code>CinemachineBrain</code> in <code>ManualUpdate</code> inside <code>LateUpdate</code> (order -40) so aspect clamping (9:16&ndash;21:9) and <code>Systems_ShotDirector</code> stay deterministic while Cinemachine manages live/highlight virtual cameras. <code>Systems_SeparationJob</code> computes per-slot opponent distances in parallel via Burst.</p></figcaption>
+    </figure>
+    <figure>
+      <img src="new_features/annotated_02_pursuit_surround.png" alt="Annotated Pursuit Intercepts">
+      <figcaption><span class="tag t-burst">#16 Burst</span><b>Parallel Pursuit Intercepts (Zero-GC)</b>
+      <p><code>Systems_SeparationJob.InterceptSeconds</code> mirrors <code>Systems_InterceptMath</code> in <code>Unity.Mathematics</code> using persistent <code>NativeArray</code>s allocated once at <code>Start</code>, feeding the top-3 pursuer lines and X intercept targets with zero per-frame allocations.</p></figcaption>
+    </figure>
+    <figure>
+      <img src="new_features/annotated_03_weather_night_rain.png" alt="Annotated Weather and Shader Graph">
+      <figcaption><span class="tag t-sg">#9 Shader Graph</span><b>#8 VFX Graph Hook + Shader Graph Field Surround</b>
+      <p><code>Systems_FieldRenderer.BuildSurround()</code> loads <code>M_PoFootballSurround.mat</code> backed by <code>PoFootball_FieldSurround.shadergraph</code> (URP 2D Sprite Unlit). <code>Systems_WeatherView</code> probes <code>SystemInfo.supportsComputeShaders</code> and exposed <code>VisualEffectAsset</code> parameters, cleanly falling back to its capped 360-particle <code>ParticleSystem</code> here because <code>VFX_WeatherPrecipitation.vfx</code> uses the starter template without custom exposed blackboard inputs.</p></figcaption>
+    </figure>
+    <figure>
+      <img src="new_features/annotated_04_debug_telemetry.png" alt="Annotated DEBUG Telemetry">
+      <figcaption><span class="tag t-phys">#18 Telemetry</span><b>Live DEBUG Sheet &amp; Contract Status</b>
+      <p>Measured in-app: <b>0.32 ms/frame</b> presentation cost, <b>154 draw calls</b>, <b>22/22 bodies 0.0 cm fit</b>, and <b>0 console errors</b>. Finding #5 flags the main open issue: Contract Revision 18 still runs <code>0/22</code> trained brains (heuristic) until <code>Config/FootballBase31.yaml</code> is trained and promoted.</p></figcaption>
+    </figure>
+  </div>
+
+  <div class="grid-2" style="margin-top:18px;">
+    <figure>
+      <img src="new_features/annotated_05_highlight_vcam.png" alt="Annotated Highlight VCam">
+      <figcaption><span class="tag t-cm">#11 Cinemachine</span><b>BroadcastHighlightVCam Priority Switch</b>
+      <p>On highlight playback, <code>BroadcastHighlightVCam</code> rises from Priority 0 to 20 with a <code>0.35s EaseInOut</code> blend (and instant cut on scrubber jumps &gt; 10 m via <code>PreviousStateIsValid = false</code>).</p></figcaption>
+    </figure>
+    <div>
+      <h2 style="margin-top:0;">What Is New — Package &amp; Architecture Summary</h2>
+      <table>
+        <tr><th>Item</th><th>Implementation</th><th>Verified Behaviour</th></tr>
+        <tr><td><b>#11 Cinemachine</b> (<code>6.6.0</code>)</td><td><code>Systems_BroadcastCameraView.cs</code> + <code>PoFootball.Views.asmdef</code></td><td><code>BroadcastLiveVCam</code> &amp; <code>BroadcastHighlightVCam</code> active in live play &amp; highlights.</td></tr>
+        <tr><td><b>#9 Shader Graph</b> (<code>17.6.0</code>)</td><td><code>PoFootball_FieldSurround.shadergraph</code> + <code>M_PoFootballSurround.mat</code></td><td>Loaded via <code>Resources.Load</code> in <code>Systems_FieldRenderer</code> (zero runtime shader compile).</td></tr>
+        <tr><td><b>#8 VFX Graph</b> (<code>17.6.0</code>)</td><td><code>VFX_WeatherPrecipitation.vfx</code> + <code>Systems_WeatherView.cs</code></td><td>Compute-shader &amp; blackboard-gated GPU path with seamless <code>ParticleSystem</code> fallback.</td></tr>
+        <tr><td><b>#16 Burst / Math</b></td><td><code>Systems_SeparationJob.cs</code> + <code>Systems_SeparationView.cs</code></td><td><code>[BurstCompile] IJobParallelFor</code> verified by <code>Systems_SeparationJobTests</code>.</td></tr>
+        <tr><td><b>#18 Physics2D Audit</b></td><td><code>Tools/calibrate_dynamics.py</code> + <code>Editor_RealismEval</code></td><td><code>calibration-rev18.json</code> written; Game 1 baseline logged (see table below).</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>#18 Physics2D Combine Calibration (Contract Revision 18)</h2>
+  <p>Output from <code>Tools/calibrate_dynamics.py</code> (<code>LINEAR_DAMPING = 0.8</code>, <code>LINE_LINEAR_DAMPING = 2.4</code>). All 10 roles sit &gt;10% slower than NFL combine splits on current constants; <code>Editor_RealismEval</code> Game 1 (seed 3902949856, heuristic) logged <code>3.23 yd/play</code>, <code>0.13 TD/drive</code>, <code>0.36 rush yd/carry</code>, <code>61% completions</code>.</p>
+  <table>
+    <tr><th>Role</th><th>Current Top Speed</th><th>10-yd Split</th><th>40-yd Dash</th><th>Joint-Fit Proposal</th></tr>
+    <tr><td>WideReceiver</td><td>9.3 m/s</td><td>1.98s (ref 1.55s)</td><td>5.18s (ref 4.48s)</td><td>9.5 m/s, d=1.60</td></tr>
+<tr><td>Cornerback</td><td>9.3 m/s</td><td>1.98s (ref 1.54s)</td><td>5.18s (ref 4.48s)</td><td>9.5 m/s, d=1.60</td></tr>
+<tr><td>Safety</td><td>9.2 m/s</td><td>2.00s (ref 1.57s)</td><td>5.22s (ref 4.55s)</td><td>9.3 m/s, d=1.60</td></tr>
+<tr><td>RunningBack</td><td>8.9 m/s</td><td>2.04s (ref 1.57s)</td><td>5.36s (ref 4.53s)</td><td>9.4 m/s, d=1.56</td></tr>
+<tr><td>Linebacker</td><td>8.0 m/s</td><td>2.18s (ref 1.62s)</td><td>5.82s (ref 4.70s)</td><td>9.1 m/s, d=1.48</td></tr>
+<tr><td>TightEnd</td><td>7.3 m/s</td><td>2.32s (ref 1.64s)</td><td>6.26s (ref 4.73s)</td><td>9.0 m/s, d=1.48</td></tr>
+<tr><td>Fullback</td><td>7.3 m/s</td><td>2.32s (ref 1.68s)</td><td>6.26s (ref 4.85s)</td><td>8.8 m/s, d=1.42</td></tr>
+<tr><td>Quarterback</td><td>7.6 m/s</td><td>2.26s (ref 1.66s)</td><td>6.06s (ref 4.80s)</td><td>8.9 m/s, d=1.46</td></tr>
+<tr><td>OffensiveLine</td><td>6.2 m/s</td><td>1.90s (ref 1.83s)</td><td>6.32s (ref 5.27s)</td><td>8.1 m/s, d=1.32</td></tr>
+<tr><td>DefensiveLine</td><td>6.2 m/s</td><td>1.90s (ref 1.72s)</td><td>6.32s (ref 4.95s)</td><td>8.6 m/s, d=1.42</td></tr>
+  </table>
+</main>
+</body>
+</html>

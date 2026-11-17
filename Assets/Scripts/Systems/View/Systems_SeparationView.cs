@@ -1,6 +1,9 @@
 using System.Collections.Generic;
 using PoFootball.Models;
 using PoFootball.Systems;
+using Unity.Collections;
+using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine;
 using VContainer;
 
@@ -119,6 +122,15 @@ namespace PoFootball.Views
         private readonly int[] _bestSlots = new int[PURSUERS];
         private readonly float[] _bestTimes = new float[PURSUERS];
 
+        private NativeArray<float4> _jobPlayers;
+        private NativeArray<int> _jobSides;
+        private NativeArray<float> _jobTopSpeeds;
+        private NativeArray<float> _jobDistances;
+        private NativeArray<float> _jobIntercepts;
+        private bool _jobAllocated;
+
+        internal bool IsBurstJobAllocated => _jobAllocated;
+
         [Inject]
         public void Construct(
             Systems_PlayerRegistry registry,
@@ -162,12 +174,29 @@ namespace PoFootball.Views
             _targetIntercept = new Vector2[capacity];
             _pursuitChosen = new bool[capacity];
 
+            _jobPlayers = new NativeArray<float4>(capacity, Allocator.Persistent);
+            _jobSides = new NativeArray<int>(capacity, Allocator.Persistent);
+            _jobTopSpeeds = new NativeArray<float>(capacity, Allocator.Persistent);
+            _jobDistances = new NativeArray<float>(capacity, Allocator.Persistent);
+            _jobIntercepts = new NativeArray<float>(capacity, Allocator.Persistent);
+            _jobAllocated = true;
+
             CollectBodies();
             BuildMesh(source);
         }
 
         private void OnDestroy()
         {
+            if (_jobAllocated)
+            {
+                _jobPlayers.Dispose();
+                _jobSides.Dispose();
+                _jobTopSpeeds.Dispose();
+                _jobDistances.Dispose();
+                _jobIntercepts.Dispose();
+                _jobAllocated = false;
+            }
+
             if (_mesh != null)
             {
                 Destroy(_mesh);
@@ -212,6 +241,11 @@ namespace PoFootball.Views
             bool passPending = live && IsPassPending(carrier);
             bool carrierRunning = live && carrier != null && !passPending;
 
+            if (enabledBySetting && (passPending || carrierRunning))
+            {
+                RunSeparationJob(passPending, carrierRunning ? carrier : null);
+            }
+
             float fade = FADE_RATE * Time.deltaTime;
             float chase = 1f - Mathf.Exp(-CHASE_RATE * Time.deltaTime);
 
@@ -219,6 +253,52 @@ namespace PoFootball.Views
             UpdatePursuit(enabledBySetting && carrierRunning ? carrier : null, fade, chase);
 
             Upload();
+        }
+
+        private void RunSeparationJob(bool computeSeparation, Systems_IPlayerHandle carrier)
+        {
+            if (!_jobAllocated)
+            {
+                return;
+            }
+
+            int capacity = Systems_PlayerRegistry.CAPACITY;
+
+            for (int slotIndex = 0; slotIndex < capacity; slotIndex++)
+            {
+                Systems_IPlayerHandle handle = _registry.Get(slotIndex);
+
+                if (handle == null)
+                {
+                    _jobSides[slotIndex] = Systems_SeparationJob.ABSENT;
+                    continue;
+                }
+
+                Vector2 position = handle.Position;
+                Vector2 velocity = handle.Velocity;
+
+                _jobPlayers[slotIndex] = new float4(position.x, position.y, velocity.x, velocity.y);
+                _jobSides[slotIndex] = handle.Side == Systems_TeamSide.Offense ? 0 : 1;
+                _jobTopSpeeds[slotIndex] = Systems_RoleTable.TopSpeedOf(
+                    handle.Role, _roster == null ? default : _roster.TraitsOf(slotIndex));
+            }
+
+            Systems_SeparationJob job = new Systems_SeparationJob
+            {
+                Players = _jobPlayers,
+                Sides = _jobSides,
+                TopSpeeds = _jobTopSpeeds,
+                CarrierPosition = carrier != null ? new float2(carrier.Position.x, carrier.Position.y) : float2.zero,
+                CarrierVelocity = carrier != null ? new float2(carrier.Velocity.x, carrier.Velocity.y) : float2.zero,
+                CarrierSide = carrier != null ? (carrier.Side == Systems_TeamSide.Offense ? 0 : 1) : Systems_SeparationJob.ABSENT,
+                HasCarrier = carrier != null ? 1 : 0,
+                ComputeSeparation = computeSeparation ? 1 : 0,
+                DefaultSeparation = GAUGE_FULL_METRES,
+                NearestOpponentDistances = _jobDistances,
+                InterceptTimes = _jobIntercepts
+            };
+
+            job.Schedule(capacity, 4).Complete();
         }
 
         /// <summary>
@@ -257,7 +337,7 @@ namespace PoFootball.Views
                     && handle.Side == Systems_TeamSide.Offense
                     && handle.Role.IsEligibleReceiver();
 
-                float separation = eligible ? NearestOpponentDistance(handle) : 0f;
+                float separation = eligible && _jobAllocated ? _jobDistances[slotIndex] : 0f;
 
                 if (eligible && _ringAlpha[slotIndex] <= 0f)
                 {
@@ -280,32 +360,6 @@ namespace PoFootball.Views
 
                 AppendRing(handle.Position, _shownSeparation[slotIndex], _ringAlpha[slotIndex]);
             }
-        }
-
-        private float NearestOpponentDistance(Systems_IPlayerHandle receiver)
-        {
-            float nearest = float.MaxValue;
-            Vector2 position = receiver.Position;
-            int capacity = Systems_PlayerRegistry.CAPACITY;
-
-            for (int slotIndex = 0; slotIndex < capacity; slotIndex++)
-            {
-                Systems_IPlayerHandle other = _registry.Get(slotIndex);
-
-                if (other == null || other.Side == receiver.Side)
-                {
-                    continue;
-                }
-
-                float distance = (other.Position - position).magnitude;
-
-                if (distance < nearest)
-                {
-                    nearest = distance;
-                }
-            }
-
-            return nearest == float.MaxValue ? GAUGE_FULL_METRES : nearest;
         }
 
         private void AppendRing(Vector2 centre, float separation, float alpha)
@@ -403,6 +457,11 @@ namespace PoFootball.Views
             int found = 0;
             int capacity = Systems_PlayerRegistry.CAPACITY;
 
+            if (!_jobAllocated)
+            {
+                return;
+            }
+
             for (int slotIndex = 0; slotIndex < capacity; slotIndex++)
             {
                 Systems_IPlayerHandle defender = _registry.Get(slotIndex);
@@ -412,12 +471,9 @@ namespace PoFootball.Views
                     continue;
                 }
 
-                float speed = Systems_RoleTable.TopSpeedOf(
-                    defender.Role, _roster == null ? default : _roster.TraitsOf(slotIndex));
+                float time = _jobIntercepts[slotIndex];
 
-                if (!TryIntercept(carrier.Position, carrier.Velocity, defender.Position, speed,
-                        out float time)
-                    || time > MAX_INTERCEPT_SECONDS)
+                if (float.IsInfinity(time) || time > MAX_INTERCEPT_SECONDS)
                 {
                     continue;
                 }
@@ -452,67 +508,6 @@ namespace PoFootball.Views
                 _targetIntercept[slotIndex] = Systems_FieldModel.ClampToField(
                     carrier.Position + (carrier.Velocity * _bestTimes[rank]));
             }
-        }
-
-        /// <summary>
-        /// Earliest t at which a man leaving <paramref name="defender"/> at
-        /// <paramref name="speed"/> can be where a carrier at
-        /// <paramref name="carrier"/> moving at <paramref name="velocity"/> will
-        /// be: |D + V t| = s t with D = carrier - defender, a quadratic in t.
-        /// No positive root means the carrier is outrunning him.
-        /// </summary>
-        private static bool TryIntercept(
-            Vector2 carrier, Vector2 velocity, Vector2 defender, float speed, out float time)
-        {
-            Vector2 offset = carrier - defender;
-
-            float a = Vector2.Dot(velocity, velocity) - (speed * speed);
-            float b = 2f * Vector2.Dot(velocity, offset);
-            float c = Vector2.Dot(offset, offset);
-
-            time = 0f;
-
-            if (Mathf.Abs(a) < 1e-4f)
-            {
-                if (b >= 0f)
-                {
-                    return false;
-                }
-
-                time = -c / b;
-                return true;
-            }
-
-            float discriminant = (b * b) - (4f * a * c);
-
-            if (discriminant < 0f)
-            {
-                return false;
-            }
-
-            float root = Mathf.Sqrt(discriminant);
-            float first = (-b - root) / (2f * a);
-            float second = (-b + root) / (2f * a);
-
-            float earliest = float.MaxValue;
-
-            if (first >= 0f)
-            {
-                earliest = first;
-            }
-
-            if (second >= 0f && second < earliest)
-            {
-                earliest = second;
-            }
-
-            if (earliest == float.MaxValue)
-            {
-                return false;
-            }
-
-            time = earliest;
-            return true;
         }
 
         private void AppendPursuit(Systems_IPlayerHandle defender, Vector2 point, float alpha)
