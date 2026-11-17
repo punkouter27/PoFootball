@@ -1,5 +1,12 @@
 {
   "dependencies": {
+    "com.ami.broaudio": {
+      "version": "https://github.com/man572142/Bro_Audio.git?path=/Assets/BroAudio#3.3.0",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "f3e34191f6a25078e3ba75edd04185aa46f8f143"
+    },
     "com.besty.unity-skills": {
       "version": "https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#e7914dfb8c189634a2ce6d2d8f232fc06605bc46",
       "depth": 0,
