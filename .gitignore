@@ -214,3 +214,6 @@ Tools/publish-venv/
 *.p12
 *service-account*.json
 .env
+
+# Generated Unity C# project files
+/*.csproj

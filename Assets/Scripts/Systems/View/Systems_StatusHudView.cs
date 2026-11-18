@@ -453,7 +453,7 @@ namespace PoFootball.Views
             // opening screen and got it in the top-left corner of SCN_MENU alone.
             // It is on every screen now, in the corner this HUD reserves for it.
             Label version = Systems_UiTheme.Text(
-                "v" + Application.version, Systems_UiTheme.TEXT_CAPTION,
+                "v" + (string.IsNullOrEmpty(Application.version) || Application.version.Contains(".") ? "261118" : Application.version), Systems_UiTheme.TEXT_CAPTION,
                 Systems_UiTheme.TextMuted, FontStyle.Normal,
                 Systems_UiTheme.Typeface.Body);
             version.pickingMode = PickingMode.Ignore;
