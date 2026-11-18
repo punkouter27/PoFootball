@@ -90,12 +90,29 @@ namespace PoFootball.EditorTools
 
             Debug.Log($"WEBGL BUILD START: v{PlayerSettings.bundleVersion} scenes={scenes.Count}");
 
-            BuildReport report = BuildPipeline.BuildPlayer(options);
-            BuildSummary summary = report.summary;
+            string prevEmscriptenArgs = PlayerSettings.WebGL.emscriptenArgs;
+            if (string.IsNullOrEmpty(prevEmscriptenArgs) || !prevEmscriptenArgs.Contains("--bind"))
+                PlayerSettings.WebGL.emscriptenArgs = string.IsNullOrWhiteSpace(prevEmscriptenArgs)
+                    ? "--bind"
+                    : prevEmscriptenArgs + " --bind";
+            BuildSummary summary;
+            try
+            {
+                BuildReport report = BuildPipeline.BuildPlayer(options);
+                summary = report.summary;
+            }
+            finally
+            {
+                PlayerSettings.WebGL.emscriptenArgs = prevEmscriptenArgs;
+            }
 
-            Debug.Log($"WEBGL BUILD RESULT: {summary.result} | errors={summary.totalErrors} | " +
-                      $"size={summary.totalSize / (1024 * 1024)}MB | " +
-                      $"time={summary.totalTime.TotalMinutes:F1}min | {OUTPUT_PATH}");
+            bool ok = summary.result == BuildResult.Succeeded;
+            string msg = $"WEBGL BUILD RESULT: {summary.result} | errors={summary.totalErrors} | " +
+                         $"size={summary.totalSize / (1024 * 1024)}MB | " +
+                         $"time={summary.totalTime.TotalMinutes:F1}min | {OUTPUT_PATH}";
+            if (ok) Debug.Log(msg);
+            else Debug.LogError(msg);
+            if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);
         }
     }
 }
