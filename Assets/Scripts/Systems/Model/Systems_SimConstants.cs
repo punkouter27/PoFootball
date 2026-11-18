@@ -569,6 +569,14 @@ namespace PoFootball.Models
         /// <summary>Extra defensive reward for a stop behind the line of scrimmage.</summary>
         public const float TACKLE_FOR_LOSS_BONUS = 0.25f;
 
+        /// <summary>
+        /// What the DEFENSE of the snap pays, on top of its zero-sum share, when a
+        /// play runs to the tick ceiling (Reward_Terminal.StallCharge). Half a tackle:
+        /// a clear preference for the stop over the bell, below a first down so it
+        /// never outweighs the yardage. See football_base32 in docs/CONTRACT_HISTORY.md.
+        /// </summary>
+        public const float STALL_DEFENSE_CHARGE = 0.25f;
+
         // --- Passing and handoffs (milestone 2) ------------------------------
         /// <summary>How close the quarterback must be to a back to hand the ball over.</summary>
         public const float HANDOFF_RADIUS = 2.0f;

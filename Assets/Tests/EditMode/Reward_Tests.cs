@@ -32,8 +32,10 @@ namespace PoFootball.Tests
                         float defense = Reward_Terminal.For(
                             Systems_TeamSide.Defense, outcome, netYards, completed);
 
+                        // The one deliberate exception, a charge to the defense alone
+                        // (Reward_Terminal.StallCharge): taken out, the split is zero-sum.
                         Assert.That(
-                            offense + defense, Is.EqualTo(0f).Within(1e-5f),
+                            offense + defense + Reward_Terminal.StallCharge(outcome), Is.EqualTo(0f).Within(1e-5f),
                             $"{outcome} at {netYards} yards (completed {completed}) "
                             + $"pays {offense} / {defense}");
                     }
@@ -95,26 +97,47 @@ namespace PoFootball.Tests
         /// <summary>
         /// Zero-sum: a stall priced below a tackle for the offense is priced above
         /// one for the defense, and football_base20's defenders shadowed carriers
-        /// past the sticks without tackling them. Exactly a tackle, on every spot,
-        /// with and without the first down, is the only price neither side prefers.
+        /// past the sticks without tackling them. So the offense is paid exactly a
+        /// tackle, on every spot, with and without the first down — and the defense
+        /// a tackle LESS the stall charge, because with the time cost on the offense
+        /// alone, equality left the defense indifferent and football_base32 stalled.
         /// </summary>
         [Test]
-        public void RunningOutTheClock_IsPricedExactlyAsATackleOnTheSameSpot()
+        public void RunningOutTheClock_IsATackleForTheOffenseAndWorseForTheDefense()
         {
             foreach (float netYards in new[] { -3f, 4f, 11f })
             {
                 foreach (bool reachedLine in new[] { false, true })
                 {
-                    foreach (Systems_TeamSide side in new[] { Systems_TeamSide.Offense, Systems_TeamSide.Defense })
-                    {
-                        Assert.That(
-                            Reward_Terminal.For(side, Systems_PlayOutcome.TimeExpired, netYards, false, reachedLine),
-                            Is.EqualTo(Reward_Terminal.For(side, Systems_PlayOutcome.Tackle, netYards, false, reachedLine))
-                                .Within(1e-6f),
-                            $"{side} {netYards} yards, line reached {reachedLine}");
-                    }
+                    Assert.That(
+                        Reward_Terminal.For(Systems_TeamSide.Offense, Systems_PlayOutcome.TimeExpired, netYards, false, reachedLine),
+                        Is.EqualTo(Reward_Terminal.For(Systems_TeamSide.Offense, Systems_PlayOutcome.Tackle, netYards, false, reachedLine))
+                            .Within(1e-6f),
+                        $"Offense {netYards} yards, line reached {reachedLine}");
+
+                    float defenseStall = Reward_Terminal.For(
+                        Systems_TeamSide.Defense, Systems_PlayOutcome.TimeExpired, netYards, false, reachedLine);
+                    float defenseTackle = Reward_Terminal.For(
+                        Systems_TeamSide.Defense, Systems_PlayOutcome.Tackle, netYards, false, reachedLine);
+
+                    Assert.That(
+                        defenseTackle - defenseStall,
+                        Is.EqualTo(Systems_SimConstants.STALL_DEFENSE_CHARGE).Within(1e-6f),
+                        $"Defense {netYards} yards, line reached {reachedLine}");
                 }
             }
+        }
+
+        /// <summary>
+        /// The stall charge must make the defense prefer the stop without making a
+        /// stall worse for it than giving up a first down on the same play.
+        /// </summary>
+        [Test]
+        public void StallCharge_IsPositiveAndBelowAFirstDown()
+        {
+            Assert.That(Systems_SimConstants.STALL_DEFENSE_CHARGE, Is.GreaterThan(0f));
+            Assert.That(Systems_SimConstants.STALL_DEFENSE_CHARGE, Is.LessThan(Systems_SimConstants.FIRST_DOWN_REWARD));
+            Assert.That(Reward_Terminal.StallCharge(Systems_PlayOutcome.Tackle), Is.EqualTo(0f));
         }
 
         /// <summary>
