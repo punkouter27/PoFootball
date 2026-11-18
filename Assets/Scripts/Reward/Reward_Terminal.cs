@@ -69,7 +69,30 @@ namespace PoFootball.Rewards
 
             offenseReward += FoulReward(in result);
 
-            return side == Systems_TeamSide.Offense ? offenseReward : -offenseReward;
+            return side == Systems_TeamSide.Offense
+                ? offenseReward
+                : -offenseReward - StallCharge(result.Outcome);
+        }
+
+        /// <summary>
+        /// What the defense of the snap pays, outside the zero-sum split, for a play
+        /// that ran to the tick ceiling.
+        ///
+        /// WHY (football_base32, 2026-11-18). A stall is priced exactly as a tackle on
+        /// the same spot, which leaves the offense nothing to gain from it — but the
+        /// time cost that "breaks the tie toward finishing" (Reward_Progress.PerTick)
+        /// is charged to the offense alone, so the defense was exactly indifferent
+        /// between stopping a carrier and trailing him to the bell. Once the cold
+        /// base32 learned to complete passes, Play/TimeExpiredRate went 0 -> 0.12
+        /// between 1.2M and 1.6M steps and the watcher HALTed it. Not zero-sum on
+        /// purpose, like <see cref="OwnFouls"/>: the offense gains nothing extra, so
+        /// it still has no reason to stall either.
+        /// </summary>
+        public static float StallCharge(Systems_PlayOutcome outcome)
+        {
+            return outcome == Systems_PlayOutcome.TimeExpired
+                ? Systems_SimConstants.STALL_DEFENSE_CHARGE
+                : 0f;
         }
 
         /// <summary>

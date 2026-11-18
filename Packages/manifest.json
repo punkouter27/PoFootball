@@ -1,8 +1,6 @@
 {
   "dependencies": {
     "com.ami.broaudio": "https://github.com/man572142/Bro_Audio.git?path=/Assets/BroAudio#3.3.0",
-    "com.besty.unity-skills": "https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#e7914dfb8c189634a2ce6d2d8f232fc06605bc46",
-    "com.coplaydev.unity-mcp": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#91eb0f4ac4c63d9d68c4ce09ee489034205950d0",
     "com.cysharp.messagepipe": "https://github.com/Cysharp/MessagePipe.git?path=src/MessagePipe.Unity/Assets/Plugins/MessagePipe#318838585b53e8e3332949f96be740cc61fcf072",
     "com.cysharp.messagepipe.vcontainer": "https://github.com/Cysharp/MessagePipe.git?path=src/MessagePipe.Unity/Assets/Plugins/MessagePipe.VContainer#318838585b53e8e3332949f96be740cc61fcf072",
     "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask#ceac8d6946b1125fe782cd171fbcb245b567dbf9",

@@ -10,6 +10,21 @@ Note (2026-11-04): every `results/` folder named below is gone, and so is `.venv
 
 ---
 
+**Revision 18, `football_base32` and `football_base33` (2026-11-17/18).** `football_base31`
+(warm from base28) could not run: `results/football_base28` is not on this PC. Its cold
+twin `football_base32` (`FootballBase32`) graduated RunFit at ~600k and by 1.6M Defense
+steps threw on 85% of plays (completion 0.94), 8.3 net yards a play, tackles 0.57 — then
+`Play/TimeExpiredRate` went 0 -> 0.02 -> 0.12 between 1.2M and 1.6M, plays lengthened
+from ~207 to 293 ticks, and the watcher HALTed it (01:26, 1 h 47 min in). The stall was
+priced exactly as a tackle on the spot, but the time cost that breaks that tie is the
+offense's alone (`Reward_Progress.PerTick`), so the defense was exactly indifferent
+between the stop and the bell. `Reward_Terminal.StallCharge` now charges the defense
+`STALL_DEFENSE_CHARGE` (0.25, half a tackle, below a first down) on a TimeExpired play,
+outside the zero-sum split like `OwnFouls`; the offense's price is unchanged. Reward
+only, still revision 18. `football_base33` (`FootballBase33`) continues from base32's
+final checkpoints, FullGame only. Not yet diagnosed from a replay: which carriers the
+expired plays had (the base32 metrics suggest catches run after, not runs).
+
 **`Assets/Agents/Football_v02` is promoted but REFUSED, so every player runs
 `Heuristic` until a revision 17 run (`football_base25`) is promoted.** v02 came from
 `football_base14` (contract revision 12, 2026-10-03), a run cut short to 1.2M steps
