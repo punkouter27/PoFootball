@@ -1,9 +1,8 @@
-# Builds the WebGL player on THIS machine and publishes it as a GitHub Release. Publishing the
+﻿# Builds the WebGL player on THIS machine and publishes it as a GitHub Release. Publishing the
 # release triggers .github/workflows/webgl.yml, which deploys the release's webgl.zip to the
 # game's Azure Static Web App on a GitHub-hosted runner. No Unity licence is needed in CI.
 #
-# SAME FILE IN EVERY PO UNITY GAME (reference copy: PoFootball; copy it with
-# this repository).
+# Owned by PoFootball.
 #
 #   pwsh -File Tools\publish_webgl.ps1               # build, zip, publish release, prune old ones
 #   pwsh -File Tools\publish_webgl.ps1 -SkipBuild    # publish the existing Builds/WebGL

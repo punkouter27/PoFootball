@@ -3,8 +3,7 @@
 # come from Tools/webgl.json; sign in to the punkouter27 tenant first (`az login --tenant`; a
 # bare `az login` finds no subscription).
 #
-# SAME FILE IN EVERY PO UNITY GAME (reference copy: PoFootball; copy it with
-# this repository).
+# Owned by PoFootball.
 #
 #   pwsh -File Tools\deploy_webgl.ps1
 #

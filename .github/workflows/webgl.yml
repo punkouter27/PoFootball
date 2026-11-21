@@ -1,7 +1,6 @@
 name: Deploy WebGL
 
-# SAME FILE IN EVERY PO UNITY GAME. The reference copy is PoBox's; copy it with
-# PoPunkouterSoftware/scripts/sync-ci.ps1, never edit one game's copy.
+# PoFootball WebGL deployment workflow.
 #
 # The WebGL player is built LOCALLY (Unity needs a licence; CI has none) by Tools/publish_webgl.ps1,
 # which uploads it as webgl.zip on a GitHub Release tagged webgl-*. Publishing that release runs
