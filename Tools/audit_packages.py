@@ -141,21 +141,21 @@ def classify_packages(usings: set[str]) -> tuple[list[dict], list[dict]]:
             # by CLAUDE.md" list, mark it keep regardless.
             UNCONDITIONAL_KEEP = {
                 "com.unity.render-pipelines.universal",  # URP, per CLAUDE.md
-                "com.unity.shadergraph",                  # authored via .shadergraph assets, not C# usings
-                "com.unity.ml-agents",                    # core, per CLAUDE.md
-                "com.unity.inputsystem",                  # NON-NEGOTIABLE per architecture rules
-                "com.unity.test-framework",               # used by tests
-                "com.cysharp.unitask",                    # per architecture rules
-                "jp.hadashikick.vcontainer",              # per architecture rules
-                "com.cysharp.messagepipe",                 # per architecture rules
-                "com.cysharp.messagepipe.vcontainer",      # per architecture rules
-                "com.unity.collections",                  # used by UniTask / jobs
-                "com.unity.mathematics",                  # used by UniTask / Burst
-                "com.unity.burst",                        # transducer for ML-Agents
-                "com.unity.nuget.newtonsoft-json",        # ML-Agents dependency
-                "com.unity.modules.uielements",           # UI Toolkit
-                "com.unity.addressables",                  # sometimes indirect
-                "com.unity.pipeline",                      # CLI bridge per CLAUDE.md TOOLING
+                "com.unity.shadergraph",  # authored via .shadergraph assets, not C# usings
+                "com.unity.ml-agents",  # core, per CLAUDE.md
+                "com.unity.inputsystem",  # NON-NEGOTIABLE per architecture rules
+                "com.unity.test-framework",  # used by tests
+                "com.cysharp.unitask",  # per architecture rules
+                "jp.hadashikick.vcontainer",  # per architecture rules
+                "com.cysharp.messagepipe",  # per architecture rules
+                "com.cysharp.messagepipe.vcontainer",  # per architecture rules
+                "com.unity.collections",  # used by UniTask / jobs
+                "com.unity.mathematics",  # used by UniTask / Burst
+                "com.unity.burst",  # transducer for ML-Agents
+                "com.unity.nuget.newtonsoft-json",  # ML-Agents dependency
+                "com.unity.modules.uielements",  # UI Toolkit
+                "com.unity.addressables",  # sometimes indirect
+                "com.unity.pipeline",  # CLI bridge per CLAUDE.md TOOLING
                 # MCP tooling — no C# from the project uses these directly, but
                 # the live editor session depends on them. False positives by
                 # this script, kept on purpose.
@@ -182,10 +182,10 @@ def write_diff(candidates: list[dict], keep: list[dict]) -> None:
         '  "dependencies": {',
     ]
     for c in candidates:
-        lines.append(f'    # (-) {c["pkg"]}  # {c["reason"]}')
+        lines.append(f"    # (-) {c['pkg']}  # {c['reason']}")
     for k in keep:
-        ev = f'  # evidence: {", ".join(k["evidence"])}' if k["evidence"] else ""
-        lines.append(f'    # (+) {k["pkg"]}  # {k["reason"]}{ev}')
+        ev = f"  # evidence: {', '.join(k['evidence'])}" if k["evidence"] else ""
+        lines.append(f"    # (+) {k['pkg']}  # {k['reason']}{ev}")
     lines.append("  }")
     lines.append("}")
     DIFF_OUT.write_text("\n".join(lines), encoding="utf-8")

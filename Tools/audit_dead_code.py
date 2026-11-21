@@ -27,9 +27,8 @@ PROD_DIRS = [ASSETS / "Scripts", ASSETS / "Editor", ASSETS / "Plugins", ASSETS /
 
 # Each csproj under the root is a "module" — only count references from a
 # different module than the declaration's module.
-CSPROJS = [
-    p for p in REPO_ROOT.glob("*.csproj")
-]
+CSPROJS = [p for p in REPO_ROOT.glob("*.csproj")]
+
 
 # Maps a .cs file → its containing csproj's name (e.g. "PoFootball.Systems").
 # The Scripts/ structure is Assets/Scripts/<ModuleName>/<sub?>/*.cs, so we
@@ -69,7 +68,9 @@ def collect_declarations() -> list[tuple[str, Path, str]]:
     """Return (TypeName, FilePath, Module) for every type declaration."""
     out: list[tuple[str, Path, str]] = []
     seen: set[str] = set()
-    pattern = re.compile(r"\b(?:public|internal|private|protected)?\s+(?:static|sealed|abstract|partial)?\s+(?:class|struct|enum|interface|record)\s+([A-Z][A-Za-z0-9_]+)")
+    pattern = re.compile(
+        r"\b(?:public|internal|private|protected)?\s+(?:static|sealed|abstract|partial)?\s+(?:class|struct|enum|interface|record)\s+([A-Z][A-Za-z0-9_]+)"
+    )
     for root in PROD_DIRS:
         if not root.exists():
             continue

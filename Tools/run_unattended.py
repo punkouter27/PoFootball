@@ -44,8 +44,10 @@ BRAINS = ("Offense", "Defense", "Quarterback", "DefenseCall")
 
 # Re-enables CTRL+C in the trainer, whatever its parent ignored, then runs
 # mlagents-learn's own entry point (mlagents.trainers.learn:main).
-TRAINER_SHIM = ("import ctypes, sys; ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False); "
-                "sys.argv[0] = 'mlagents-learn'; from mlagents.trainers.learn import main; sys.exit(main())")
+TRAINER_SHIM = (
+    "import ctypes, sys; ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False); "
+    "sys.argv[0] = 'mlagents-learn'; from mlagents.trainers.learn import main; sys.exit(main())"
+)
 
 CREATE_NEW_CONSOLE = 0x00000010
 STARTF_USESHOWWINDOW = 0x00000001
@@ -92,31 +94,56 @@ class Run:
         # a shell that ignores CTRL+C inherits that, and football_base30 (launched by
         # an agent's shell) ignored both the watcher's HALT and the deadline's CTRL+C,
         # trained 4 h past the HALT, and was killed without exporting its brains.
-        command = [str(PYTHON), "-u", "-c", TRAINER_SHIM, self.args.config, f"--run-id={self.args.run}",
-                   f"--env={ENV_EXE}", "--no-graphics",
-                   f"--base-port={self.args.base_port}", f"--num-envs={self.args.num_envs}"]
+        command = [
+            str(PYTHON),
+            "-u",
+            "-c",
+            TRAINER_SHIM,
+            self.args.config,
+            f"--run-id={self.args.run}",
+            f"--env={ENV_EXE}",
+            "--no-graphics",
+            f"--base-port={self.args.base_port}",
+            f"--num-envs={self.args.num_envs}",
+        ]
         if resume:
             command.append("--resume")
         out = open(REPO_ROOT / "results" / f"{self.args.run}_trainer.log", "a", encoding="utf-8")
         # A console of its own: CTRL+C is delivered per console, and the trainer
         # must get it without this process getting it too.
         self.trainer = subprocess.Popen(
-            command, cwd=REPO_ROOT, env=env, stdout=out, stderr=subprocess.STDOUT,
-            creationflags=CREATE_NEW_CONSOLE, startupinfo=self._hidden_console())
+            command,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            creationflags=CREATE_NEW_CONSOLE,
+            startupinfo=self._hidden_console(),
+        )
         self.log(f"trainer started, pid {self.trainer.pid}{' (--resume)' if resume else ''}")
         self.start_watcher()
 
     def start_watcher(self) -> None:
         if self.watcher and self.watcher.poll() is None:
             self.watcher.kill()
-        command = [str(PYTHON), "-u", str(REPO_ROOT / "Tools" / "watch_hacks.py"),
-                   "--run", self.args.run, "--stop-trainer", "--trainer-pid", str(self.trainer.pid),
-                   "--target", str(10**12)]
+        command = [
+            str(PYTHON),
+            "-u",
+            str(REPO_ROOT / "Tools" / "watch_hacks.py"),
+            "--run",
+            self.args.run,
+            "--stop-trainer",
+            "--trainer-pid",
+            str(self.trainer.pid),
+            "--target",
+            str(10**12),
+        ]
         if self.args.stall_after:
             command += ["--stall-after", str(self.args.stall_after)]
         out = open(REPO_ROOT / "results" / f"{self.args.run}_watch.log", "a", encoding="utf-8")
-        self.watcher = subprocess.Popen(command, cwd=REPO_ROOT, stdout=out, stderr=subprocess.STDOUT,
-                                        creationflags=subprocess.CREATE_NO_WINDOW)
+        self.watcher = subprocess.Popen(
+            command, cwd=REPO_ROOT, stdout=out, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW
+        )
         self.log(f"hack watcher started, pid {self.watcher.pid}")
 
     def stop_trainer_cleanly(self) -> None:
@@ -124,10 +151,16 @@ class Run:
             return
         # watch_hacks.stop_trainer attaches to the trainer's console; run it in a
         # child so THIS process never gives up its own.
-        subprocess.run([str(PYTHON), "-c",
-                        "import sys; sys.path.insert(0, r'%s'); import watch_hacks; "
-                        "watch_hacks.stop_trainer(%d)" % (REPO_ROOT / "Tools", self.trainer.pid)],
-                       cwd=REPO_ROOT, creationflags=subprocess.CREATE_NO_WINDOW)
+        subprocess.run(
+            [
+                str(PYTHON),
+                "-c",
+                f"import sys; sys.path.insert(0, r'{REPO_ROOT / 'Tools'}'); import watch_hacks; "
+                f"watch_hacks.stop_trainer({self.trainer.pid})",
+            ],
+            cwd=REPO_ROOT,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
         self.log("CTRL+C sent; waiting for the trainer to export its brains")
         try:
             self.trainer.wait(timeout=600)
@@ -189,25 +222,37 @@ class Run:
     def judge_and_report(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         if self.args.tensorboard_pid:
-            subprocess.run(["taskkill", "/PID", str(self.args.tensorboard_pid), "/T", "/F"],
-                           capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(self.args.tensorboard_pid), "/T", "/F"], capture_output=True)
             self.log("TensorBoard stopped")
 
         if self.args.realism_last > 0:
             self.log(f"checkpoint realism on the newest {self.args.realism_last} checkpoints")
             with open(self.dir / "checkpoint_realism.log", "a", encoding="utf-8") as out:
                 code = subprocess.run(
-                    [str(PYTHON), "-u", str(REPO_ROOT / "Tools" / "checkpoint_realism.py"),
-                     "--run", self.args.run, "--last", str(self.args.realism_last)]
+                    [
+                        str(PYTHON),
+                        "-u",
+                        str(REPO_ROOT / "Tools" / "checkpoint_realism.py"),
+                        "--run",
+                        self.args.run,
+                        "--last",
+                        str(self.args.realism_last),
+                    ]
                     + (["--in-editor"] if self.args.realism_in_editor else []),
-                    cwd=REPO_ROOT, stdout=out, stderr=subprocess.STDOUT).returncode
+                    cwd=REPO_ROOT,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                ).returncode
             self.log(f"checkpoint realism exited {code}")
 
         stage_weights(self)
 
-        code = subprocess.run([str(PYTHON), str(REPO_ROOT / "Tools" / "training_report.py"),
-                               "--run", self.args.run], cwd=REPO_ROOT,
-                              capture_output=True, text=True)
+        code = subprocess.run(
+            [str(PYTHON), str(REPO_ROOT / "Tools" / "training_report.py"), "--run", self.args.run],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
         self.log(f"training report: {(code.stdout or code.stderr).strip()}")
 
 
@@ -259,13 +304,16 @@ def main() -> int:
     parser.add_argument("--base-port", type=int, default=5400)
     parser.add_argument("--stall-after", type=int, default=0, help="passed to watch_hacks.py")
     parser.add_argument("--max-restarts", type=int, default=5)
-    parser.add_argument("--realism-last", type=int, default=4,
-                        help="checkpoints to judge at the end; 0 skips it")
-    parser.add_argument("--realism-in-editor", action="store_true",
-                        help="judge checkpoints in the OPEN Editor; the batch-mode path "
-                             "never finished a game for football_base26 (2026-11-05)")
-    parser.add_argument("--tensorboard-pid", type=int, default=0,
-                        help="stopped after the trainer and envs, per CLAUDE.md")
+    parser.add_argument("--realism-last", type=int, default=4, help="checkpoints to judge at the end; 0 skips it")
+    parser.add_argument(
+        "--realism-in-editor",
+        action="store_true",
+        help="judge checkpoints in the OPEN Editor; the batch-mode path "
+        "never finished a game for football_base26 (2026-11-05)",
+    )
+    parser.add_argument(
+        "--tensorboard-pid", type=int, default=0, help="stopped after the trainer and envs, per CLAUDE.md"
+    )
     args = parser.parse_args()
 
     if not ENV_EXE.exists():

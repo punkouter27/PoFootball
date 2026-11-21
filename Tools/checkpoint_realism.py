@@ -97,9 +97,12 @@ def judge(report: dict) -> dict:
             continue
         means[key] = sum(values) / len(values)
         inside[key] = low <= means[key] <= high
-    return {"games": len(games), "means": means, "inside": inside,
-            "passed": bool(inside) and all(inside.values())
-                      and len(games) >= promote_brain.REALISM_MIN_GAMES}
+    return {
+        "games": len(games),
+        "means": means,
+        "inside": inside,
+        "passed": bool(inside) and all(inside.values()) and len(games) >= promote_brain.REALISM_MIN_GAMES,
+    }
 
 
 def distance_from_bands(means: dict) -> float:
@@ -114,9 +117,20 @@ def distance_from_bands(means: dict) -> float:
 
 def evaluate(unity: Path, stage: Path, label: str, log: Path) -> dict | None:
     before = set(REALISM_DIR.glob("realism-*.json")) if REALISM_DIR.is_dir() else set()
-    command = [str(unity), "-batchmode", "-projectPath", str(REPO_ROOT),
-               "-executeMethod", "PoFootball.EditorTools.Editor_CheckpointRealism.RunBatch",
-               "-checkpointDir", str(stage), "-checkpointLabel", label, "-logFile", str(log)]
+    command = [
+        str(unity),
+        "-batchmode",
+        "-projectPath",
+        str(REPO_ROOT),
+        "-executeMethod",
+        "PoFootball.EditorTools.Editor_CheckpointRealism.RunBatch",
+        "-checkpointDir",
+        str(stage),
+        "-checkpointLabel",
+        label,
+        "-logFile",
+        str(log),
+    ]
     started = time.time()
     code = subprocess.call(command)
     after = set(REALISM_DIR.glob("realism-*.json")) if REALISM_DIR.is_dir() else set()
@@ -136,8 +150,14 @@ IN_EDITOR_POLL_SECONDS = 15
 def unity_cli(*arguments: str, timeout: int = 120) -> str:
     """One `unity` CLI call; its last line, which carries the JSON result."""
     try:
-        output = subprocess.run(["unity", *arguments], capture_output=True, text=True,
-                                timeout=timeout, stdin=subprocess.DEVNULL, errors="replace").stdout
+        output = subprocess.run(
+            ["unity", *arguments],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            errors="replace",
+        ).stdout
     except (OSError, subprocess.TimeoutExpired) as error:
         return f"unity CLI failed: {error}"
     lines = [line for line in output.splitlines() if line.strip()]
@@ -149,9 +169,11 @@ def evaluate_in_editor(stage: Path, label: str) -> dict | None:
     before = set(REALISM_DIR.glob("realism-*.json")) if REALISM_DIR.is_dir() else set()
     # By reflection: the class is internal to Assembly-CSharp-Editor and eval
     # compiles its snippet into an assembly of its own.
-    code = ("return (string)System.Type.GetType(\"PoFootball.EditorTools.Editor_CheckpointRealism, "
-            "Assembly-CSharp-Editor\").GetMethod(\"RunInEditor\").Invoke(null, new object[] { "
-            f"@\"{stage}\", \"{label}\" }});")
+    code = (
+        'return (string)System.Type.GetType("PoFootball.EditorTools.Editor_CheckpointRealism, '
+        'Assembly-CSharp-Editor").GetMethod("RunInEditor").Invoke(null, new object[] { '
+        f'@"{stage}", "{label}" }});'
+    )
     reply = unity_cli("command", "eval", "--code", code)
     match = re.search(r'"result":"([^"]*)"', reply)
     if not match or match.group(1) != "started":
@@ -187,8 +209,9 @@ def main() -> int:
     parser.add_argument("--last", type=int, default=3, help=f"else the newest N {LEAD} checkpoints")
     parser.add_argument("--unity", type=Path, default=DEFAULT_UNITY)
     parser.add_argument("--allow-during-training", action="store_true")
-    parser.add_argument("--in-editor", action="store_true",
-                        help="drive the open Editor through the unity CLI, not a batch-mode Unity")
+    parser.add_argument(
+        "--in-editor", action="store_true", help="drive the open Editor through the unity CLI, not a batch-mode Unity"
+    )
     args = parser.parse_args()
 
     run_dir = RESULTS_DIR / args.run
@@ -199,8 +222,11 @@ def main() -> int:
         print(f"No Unity at {args.unity}; pass --unity", file=sys.stderr)
         return 2
     if trainer_running() and not args.allow_during_training:
-        print("mlagents-learn is running. The Editor is closed during long runs; judge the "
-              "checkpoints after it ends, or pass --allow-during-training.", file=sys.stderr)
+        print(
+            "mlagents-learn is running. The Editor is closed during long runs; judge the "
+            "checkpoints after it ends, or pass --allow-during-training.",
+            file=sys.stderr,
+        )
         return 2
 
     available = {group: checkpoints(run_dir, group) for group in GROUPS}
@@ -210,7 +236,7 @@ def main() -> int:
         return 2
 
     lead = available[LEAD]
-    steps = args.steps or list(lead)[-args.last:]
+    steps = args.steps or list(lead)[-args.last :]
     contract = promote_brain.expected_contract()
     ledger_path = run_dir / "realism_checkpoints.json"
     ledger = json.loads(ledger_path.read_text(encoding="utf-8")) if ledger_path.exists() else []
@@ -220,14 +246,18 @@ def main() -> int:
             print(f"{LEAD}-{step}.onnx not in {run_dir / LEAD}; have {list(lead)}", file=sys.stderr)
             return 2
         moment = lead[step].stat().st_mtime
-        chosen = {group: (lead[step] if group == LEAD else nearest_in_time(available[group], moment))
-                  for group in GROUPS}
+        chosen = {
+            group: (lead[step] if group == LEAD else nearest_in_time(available[group], moment)) for group in GROUPS
+        }
 
         label = f"{args.run}@{step}"
         print(f"\n{label}: " + ", ".join(path.name for path in chosen.values()))
 
-        problems = [f"{group}: {problem}" for group, path in chosen.items()
-                    for problem in promote_brain.validate(group, path, contract)]
+        problems = [
+            f"{group}: {problem}"
+            for group, path in chosen.items()
+            for problem in promote_brain.validate(group, path, contract)
+        ]
         if problems:
             print("  REFUSED by the shape gate:\n    " + "\n    ".join(problems))
             ledger.append({"label": label, "refused": problems})
@@ -238,21 +268,33 @@ def main() -> int:
         for group, path in chosen.items():
             shutil.copyfile(path, stage / f"{group}.onnx")
 
-        report = (evaluate_in_editor(stage, label) if args.in_editor
-                  else evaluate(args.unity, stage, label, stage / "unity.log"))
+        report = (
+            evaluate_in_editor(stage, label)
+            if args.in_editor
+            else evaluate(args.unity, stage, label, stage / "unity.log")
+        )
         if report is None or not report.get("brains_loaded", False):
-            print("  NOT EVALUATED: no report, or the checkpoint table was refused "
-                  "(another contract revision?). See the Unity log.")
+            print(
+                "  NOT EVALUATED: no report, or the checkpoint table was refused "
+                "(another contract revision?). See the Unity log."
+            )
             ledger.append({"label": label, "evaluated": False})
             continue
 
         verdict = judge(report)
-        verdict.update({"label": label, "report": report["_path"],
-                        "files": {group: path.name for group, path in chosen.items()}})
+        verdict.update(
+            {"label": label, "report": report["_path"], "files": {group: path.name for group, path in chosen.items()}}
+        )
         ledger.append(verdict)
-        print("  " + ("PASSED" if verdict["passed"] else "FAILED") + "  " + ", ".join(
-            f"{key} {value:.2f}{'' if verdict['inside'][key] else ' OUT'}"
-            for key, value in verdict["means"].items()))
+        print(
+            "  "
+            + ("PASSED" if verdict["passed"] else "FAILED")
+            + "  "
+            + ", ".join(
+                f"{key} {value:.2f}{'' if verdict['inside'][key] else ' OUT'}"
+                for key, value in verdict["means"].items()
+            )
+        )
 
     ledger_path.write_text(json.dumps(ledger, indent=2), encoding="utf-8")
 
@@ -260,8 +302,10 @@ def main() -> int:
     judged.sort(key=lambda entry: (not entry["passed"], distance_from_bands(entry["means"])))
     print(f"\nAll judged checkpoints of {args.run}, best first ({ledger_path.name}):")
     for entry in judged:
-        print(f"  {'PASS' if entry['passed'] else 'fail'} {entry['label']:32} "
-              f"{distance_from_bands(entry['means']):5.2f} band-widths out")
+        print(
+            f"  {'PASS' if entry['passed'] else 'fail'} {entry['label']:32} "
+            f"{distance_from_bands(entry['means']):5.2f} band-widths out"
+        )
 
     return 0 if judged and judged[0]["passed"] else 1
 

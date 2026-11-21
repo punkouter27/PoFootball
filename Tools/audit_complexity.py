@@ -38,7 +38,12 @@ def complexity(text: str) -> dict[str, int]:
     lines = text.splitlines()
     sloc_lines = [ln for ln in stripped.splitlines() if ln.strip()]
 
-    methods = len(re.findall(r"\b(?:public|private|internal|protected|static)\s+[A-Za-z_][A-Za-z0-9_<>?,\s]*\s+[A-Z][A-Za-z0-9_]+\s*\(", stripped))
+    methods = len(
+        re.findall(
+            r"\b(?:public|private|internal|protected|static)\s+[A-Za-z_][A-Za-z0-9_<>?,\s]*\s+[A-Z][A-Za-z0-9_]+\s*\(",
+            stripped,
+        )
+    )
     branches = sum(stripped.count(tok) for tok in (" if ", " if(", " else ", " for ", " foreach ", " while ", " case "))
     switches = stripped.count(" switch ")
     if_blocks = stripped.count(" if ")

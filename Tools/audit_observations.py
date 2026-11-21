@@ -45,29 +45,66 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SENSOR = REPO_ROOT / "Assets/Scripts/Sensor/Sensor_FootballState.cs"
 
-ROLES = ("Quarterback", "RunningBack", "WideReceiver", "TightEnd", "OffensiveLine",
-         "DefensiveLine", "Linebacker", "Cornerback", "Safety", "Fullback")
-CALLS = ("KeepQuarterback", "HandoffFullback", "HandoffHalfback", "Pass", "Punt",
-         "FieldGoal", "PassDeep")
+ROLES = (
+    "Quarterback",
+    "RunningBack",
+    "WideReceiver",
+    "TightEnd",
+    "OffensiveLine",
+    "DefensiveLine",
+    "Linebacker",
+    "Cornerback",
+    "Safety",
+    "Fullback",
+)
+CALLS = ("KeepQuarterback", "HandoffFullback", "HandoffHalfback", "Pass", "Punt", "FieldGoal", "PassDeep")
 
 # The order Sensor_FootballState.Write fills the buffer in. Checked against
 # OBSERVATION_SIZE below, so a new float that is not named here stops the audit
 # rather than shifting every name after it by one.
 VECTOR_NAMES = (
     [f"role/{r}" for r in ROLES]
-    + ["pos/x", "pos/y", "vel/sideways", "vel/forward", "facing/cos", "facing/sin",
-       "fatigue", "is_carrier", "ball/offset_a", "ball/offset_b", "ball/vel_a", "ball/vel_b",
-       "ball/held", "ball/in_flight", "ball/kicked", "ball/loose",
-       "field/to_goal", "field/to_line", "spin", "play_clock", "down", "distance"]
+    + [
+        "pos/x",
+        "pos/y",
+        "vel/sideways",
+        "vel/forward",
+        "facing/cos",
+        "facing/sin",
+        "fatigue",
+        "is_carrier",
+        "ball/offset_a",
+        "ball/offset_b",
+        "ball/vel_a",
+        "ball/vel_b",
+        "ball/held",
+        "ball/in_flight",
+        "ball/kicked",
+        "ball/loose",
+        "field/to_goal",
+        "field/to_line",
+        "spin",
+        "play_clock",
+        "down",
+        "distance",
+    ]
     + [f"call/{c}" for c in CALLS]
-    + ["possession", "ball/height", "kind/kickoff", "kind/punt", "kind/placekick",
-       "kind/two_point", "pre_snap", "trait/speed", "trait/strength", "trait/agility",
-       "trait/discipline"]
+    + [
+        "possession",
+        "ball/height",
+        "kind/kickoff",
+        "kind/punt",
+        "kind/placekick",
+        "kind/two_point",
+        "pre_snap",
+        "trait/speed",
+        "trait/strength",
+        "trait/agility",
+        "trait/discipline",
+    ]
 )
 
-DEFENSE_CALL_NAMES = (
-    ["down", "distance", "to_goal", "two_point"] + [f"formation/{i}" for i in range(8)]
-)
+DEFENSE_CALL_NAMES = ["down", "distance", "to_goal", "two_point"] + [f"formation/{i}" for i in range(8)]
 
 CLAMP = 0.999
 CONSTANT_STD = 1e-6
@@ -100,7 +137,8 @@ def load(demo_dir: Path) -> dict:
     for behavior, sensors in rows.items():
         result[behavior] = {
             index: (names[(behavior, index)], np.asarray(samples, dtype=np.float32))
-            for index, samples in sensors.items() if samples and samples[0]
+            for index, samples in sensors.items()
+            if samples and samples[0]
         }
     return result
 
@@ -114,15 +152,19 @@ def describe(values, labels: list[str]) -> list[dict]:
         unique = np.unique(np.round(data, 4))
         binary = set(unique.tolist()) <= {0.0, 1.0}
         std = float(data.std())
-        stats.append({
-            "index": column,
-            "name": labels[column] if column < len(labels) else f"[{column}]",
-            "min": float(data.min()), "max": float(data.max()),
-            "mean": float(data.mean()), "std": std,
-            "at_clamp": float((np.abs(data) >= CLAMP).mean()),
-            "binary": bool(binary),
-            "constant": std < CONSTANT_STD,
-        })
+        stats.append(
+            {
+                "index": column,
+                "name": labels[column] if column < len(labels) else f"[{column}]",
+                "min": float(data.min()),
+                "max": float(data.max()),
+                "mean": float(data.mean()),
+                "std": std,
+                "at_clamp": float((np.abs(data) >= CLAMP).mean()),
+                "binary": bool(binary),
+                "constant": std < CONSTANT_STD,
+            }
+        )
     return stats
 
 
@@ -151,8 +193,11 @@ def main() -> int:
 
     size = read_observation_size()
     if len(VECTOR_NAMES) != size:
-        print(f"VECTOR_NAMES has {len(VECTOR_NAMES)} names; Sensor_FootballState writes {size}. "
-              "Name the new floats before auditing.", file=sys.stderr)
+        print(
+            f"VECTOR_NAMES has {len(VECTOR_NAMES)} names; Sensor_FootballState writes {size}. "
+            "Name the new floats before auditing.",
+            file=sys.stderr,
+        )
         return 2
 
     if not args.demos.is_dir() or not any(args.demos.glob("*.demo")):
@@ -164,7 +209,7 @@ def main() -> int:
 
     for behavior in sorted(data):
         report[behavior] = {}
-        for index, (name, values) in sorted(data[behavior].items()):
+        for _index, (name, values) in sorted(data[behavior].items()):
             is_vector = values.shape[1] in (size, len(DEFENSE_CALL_NAMES))
             labels = list(VECTOR_NAMES) if values.shape[1] == size else list(DEFENSE_CALL_NAMES)
             stats = describe(values, labels if is_vector else [])
@@ -176,8 +221,10 @@ def main() -> int:
                 saturated = sum(s["at_clamp"] > 0.5 for s in stats)
                 dead = sum(s["constant"] for s in stats)
                 mean_clamp = sum(s["at_clamp"] for s in stats) / len(stats)
-                print(f"   rays: {dead} constant floats, {saturated} at the clamp on most "
-                      f"samples, {mean_clamp:.0%} of all ray floats at the clamp")
+                print(
+                    f"   rays: {dead} constant floats, {saturated} at the clamp on most "
+                    f"samples, {mean_clamp:.0%} of all ray floats at the clamp"
+                )
                 continue
 
             for s in stats:
@@ -189,9 +236,11 @@ def main() -> int:
                 if notes:
                     findings.append(f"{behavior}/{s['name']}: {', '.join(notes)}")
                 kind = "bin" if s["binary"] else "   "
-                print(f"   {s['index']:2d} {s['name']:22} {kind} [{s['min']:+.2f}, {s['max']:+.2f}] "
-                      f"mean {s['mean']:+.2f} sd {s['std']:.3f} clamp {s['at_clamp']:4.0%} "
-                      f"{' '.join(notes)}")
+                print(
+                    f"   {s['index']:2d} {s['name']:22} {kind} [{s['min']:+.2f}, {s['max']:+.2f}] "
+                    f"mean {s['mean']:+.2f} sd {s['std']:.3f} clamp {s['at_clamp']:4.0%} "
+                    f"{' '.join(notes)}"
+                )
             for pair in pairs:
                 findings.append(f"{behavior}: {pair['a']} ~ {pair['b']} r={pair['r']:+.3f} (check: script habit?)")
                 print(f"   CORRELATED {pair['a']} ~ {pair['b']}  r={pair['r']:+.3f}")

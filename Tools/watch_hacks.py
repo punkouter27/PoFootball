@@ -75,23 +75,71 @@ class Rule:
 # scripted game flags ~1.6% of plays, a trained one ~1-2%; ceiling plays were
 # ~1% before the breakaway rule and 6-7% at the stall.
 RULES = (
-    Rule("stall", "Defense", "Play/TimeExpiredRate", True, 0.05, HALT, 0,
-         "plays reaching the 600-tick ceiling: the base20 stall"),
+    Rule(
+        "stall",
+        "Defense",
+        "Play/TimeExpiredRate",
+        True,
+        0.05,
+        HALT,
+        0,
+        "plays reaching the 600-tick ceiling: the base20 stall",
+    ),
     # Judged from 1M steps (2026-11-06): a warm start across a RULE change spikes it
     # while the old habits meet the new game -- football_base28/29 read 0.05-0.19
     # in their first 250k steps once the quarterback started throwing (late hits
     # on him). The base18/19 hack it exists for climbed over millions of steps,
     # so it is still caught; the per-foul Foul/* series say which flag it is.
-    Rule("flags", "Offense", "Play/FlagRate", True, 0.06, HALT, 1_000_000,
-         "flags on more than 6% of plays: the base18/19 block in the back"),
-    Rule("solver", "Offense", "Control/SpeedClampRate", True, 0.001, HALT, 0,
-         "pileup guard firing: a policy farming solver blow-ups"),
-    Rule("no-sacks", "Defense", "Play/SackRate", False, 0.0005, WARN, 1_500_000,
-         "no sacks at all: the base22 passive pass rush"),
-    Rule("touchdowns", "Defense", "Play/TouchdownRate", True, 0.25, WARN, 1_000_000,
-         "a touchdown on more than a quarter of plays: nobody is tackling"),
-    Rule("call-collapse", "Quarterback", "Call/Entropy", False, 0.80, HALT, 0,
-         "the play call has collapsed onto one option (watch_entropy.py)"),
+    Rule(
+        "flags",
+        "Offense",
+        "Play/FlagRate",
+        True,
+        0.06,
+        HALT,
+        1_000_000,
+        "flags on more than 6% of plays: the base18/19 block in the back",
+    ),
+    Rule(
+        "solver",
+        "Offense",
+        "Control/SpeedClampRate",
+        True,
+        0.001,
+        HALT,
+        0,
+        "pileup guard firing: a policy farming solver blow-ups",
+    ),
+    Rule(
+        "no-sacks",
+        "Defense",
+        "Play/SackRate",
+        False,
+        0.0005,
+        WARN,
+        1_500_000,
+        "no sacks at all: the base22 passive pass rush",
+    ),
+    Rule(
+        "touchdowns",
+        "Defense",
+        "Play/TouchdownRate",
+        True,
+        0.25,
+        WARN,
+        1_000_000,
+        "a touchdown on more than a quarter of plays: nobody is tackling",
+    ),
+    Rule(
+        "call-collapse",
+        "Quarterback",
+        "Call/Entropy",
+        False,
+        0.80,
+        HALT,
+        0,
+        "the play call has collapsed onto one option (watch_entropy.py)",
+    ),
 )
 
 # Prefixes whose largest member is judged as a share: one front on > 90% of plays.
@@ -110,7 +158,7 @@ def load(behavior_dir: Path):
         from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
     except ImportError:
         print("tensorboard is not installed in this environment.", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
 
     if not behavior_dir.is_dir():
         return None
@@ -165,9 +213,11 @@ def check(run_dir: Path, consecutive: int) -> tuple[list, list, int]:
         line = f"{rule.severity} {rule.name}: {reading} - {rule.why}"
         if tripped:
             (halts if rule.severity == HALT else warnings).append(line)
-        elif (points and points[-1].step < rule.after_step
-              and ((points[-1].value > rule.threshold) if rule.above
-                   else (points[-1].value < rule.threshold))):
+        elif (
+            points
+            and points[-1].step < rule.after_step
+            and ((points[-1].value > rule.threshold) if rule.above else (points[-1].value < rule.threshold))
+        ):
             # In a rule's grace period a reading past the line is still worth
             # seeing; it just cannot end the run yet.
             warnings.append(f"WARN {rule.name} (judged from {rule.after_step:,}): {reading} - {rule.why}")
@@ -182,9 +232,7 @@ def check(run_dir: Path, consecutive: int) -> tuple[list, list, int]:
         if shares:
             top = max(shares, key=lambda t: shares[t][-1].value)
             if all(point.value > FRONT_CEILING for point in shares[top]):
-                halts.append(
-                    f"HALT front-collapse: {top} {shares[top][-1].value:.2f} of plays "
-                    f"- the base17 zero blitz")
+                halts.append(f"HALT front-collapse: {top} {shares[top][-1].value:.2f} of plays - the base17 zero blitz")
             else:
                 print(f"  ok front-collapse: top {top} {shares[top][-1].value:.2f}")
 
@@ -197,7 +245,8 @@ def check(run_dir: Path, consecutive: int) -> tuple[list, list, int]:
         if len(points) == consecutive and all(p.value > LEDGER_CEILING for p in points):
             warnings.append(
                 f"WARN shaping: {tag} {points[-1].value:.2f} - dense shaping is more "
-                f"than half of {behavior}'s reward; the result no longer decides it")
+                f"than half of {behavior}'s reward; the result no longer decides it"
+            )
 
     return halts, warnings, newest
 
@@ -219,26 +268,30 @@ def stop_trainer(pid: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--run", required=True, help="run id under results/")
-    parser.add_argument("--target", type=int, default=8_000_000,
-                        help="stop watching once any rule's brain reaches this step")
-    parser.add_argument("--consecutive", type=int, default=3,
-                        help="summaries beyond a threshold before a rule trips")
+    parser.add_argument(
+        "--target", type=int, default=8_000_000, help="stop watching once any rule's brain reaches this step"
+    )
+    parser.add_argument("--consecutive", type=int, default=3, help="summaries beyond a threshold before a rule trips")
     parser.add_argument("--interval", type=int, default=300, help="seconds between polls")
     parser.add_argument("--once", action="store_true", help="one report, then exit")
-    parser.add_argument("--stop-trainer", action="store_true",
-                        help="on a HALT, send the trainer CTRL+C (needs --trainer-pid)")
+    parser.add_argument(
+        "--stop-trainer", action="store_true", help="on a HALT, send the trainer CTRL+C (needs --trainer-pid)"
+    )
     parser.add_argument("--trainer-pid", type=int, default=0)
-    parser.add_argument("--stall-after", type=int, default=0,
-                        help="judge the stall rule only from this step (a FRESH run: "
-                             "an untrained carrier wanders to the ceiling before any "
-                             "defense has learned to tackle; the rule was set on "
-                             "warm-started runs). Warns before then. Default 0.")
+    parser.add_argument(
+        "--stall-after",
+        type=int,
+        default=0,
+        help="judge the stall rule only from this step (a FRESH run: "
+        "an untrained carrier wanders to the ceiling before any "
+        "defense has learned to tackle; the rule was set on "
+        "warm-started runs). Warns before then. Default 0.",
+    )
     args = parser.parse_args()
 
     if args.stall_after:
         global RULES
-        RULES = tuple(replace(rule, after_step=args.stall_after) if rule.name == "stall" else rule
-                      for rule in RULES)
+        RULES = tuple(replace(rule, after_step=args.stall_after) if rule.name == "stall" else rule for rule in RULES)
 
     run_dir = RESULTS_DIR / args.run
     if not run_dir.is_dir():

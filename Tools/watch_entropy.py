@@ -52,7 +52,7 @@ def read_entropy(behavior_dir: Path) -> list:
         from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
     except ImportError:
         print("tensorboard is not installed in this environment.", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
 
     if not behavior_dir.is_dir():
         return []
@@ -78,15 +78,18 @@ def main() -> int:
         "--behavior",
         default="Quarterback",
         help="behavior whose Call/Entropy to watch (default: Quarterback, the "
-             "only brain with a discrete play call since base04)")
+        "only brain with a discrete play call since base04)",
+    )
     parser.add_argument(
-        "--target", type=int, default=3_200_000,
-        help="stop watching once this step is reached (default: 3.2M, past "
-             "base05's 3.1M collapse point)")
+        "--target",
+        type=int,
+        default=3_200_000,
+        help="stop watching once this step is reached (default: 3.2M, past base05's 3.1M collapse point)",
+    )
     parser.add_argument("--floor", type=float, default=0.80, help="collapse threshold")
     parser.add_argument(
-        "--consecutive", type=int, default=3,
-        help="summaries under the floor before calling it a collapse")
+        "--consecutive", type=int, default=3, help="summaries under the floor before calling it a collapse"
+    )
     parser.add_argument("--interval", type=int, default=300, help="seconds between polls")
     args = parser.parse_args()
 
@@ -97,25 +100,24 @@ def main() -> int:
 
     print(
         f"Watching {ENTROPY_TAG} for {args.run}/{args.behavior} — "
-        f"floor {args.floor}, {args.consecutive} consecutive, target {args.target:,}")
+        f"floor {args.floor}, {args.consecutive} consecutive, target {args.target:,}"
+    )
 
     while True:
         events = read_entropy(behavior_dir)
 
         if events:
             latest = events[-1]
-            tail = [point.value for point in events[-args.consecutive:]]
+            tail = [point.value for point in events[-args.consecutive :]]
 
             if len(tail) == args.consecutive and all(value < args.floor for value in tail):
                 print(
-                    f"COLLAPSE: {ENTROPY_TAG} {[round(v, 3) for v in tail]} "
-                    f"under {args.floor} at step {latest.step:,}")
+                    f"COLLAPSE: {ENTROPY_TAG} {[round(v, 3) for v in tail]} under {args.floor} at step {latest.step:,}"
+                )
                 return 1
 
             if latest.step >= args.target:
-                print(
-                    f"PASSED target: step {latest.step:,}, "
-                    f"{ENTROPY_TAG} {latest.value:.3f}")
+                print(f"PASSED target: step {latest.step:,}, {ENTROPY_TAG} {latest.value:.3f}")
                 return 0
 
         time.sleep(args.interval)

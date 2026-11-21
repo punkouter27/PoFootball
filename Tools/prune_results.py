@@ -154,9 +154,7 @@ def main() -> int:
         print(f"No results directory at {RESULTS_DIR}")
         return 0
 
-    runs = [RESULTS_DIR / args.run] if args.run else sorted(
-        d for d in RESULTS_DIR.iterdir() if d.is_dir()
-    )
+    runs = [RESULTS_DIR / args.run] if args.run else sorted(d for d in RESULTS_DIR.iterdir() if d.is_dir())
 
     total_removed = 0
     total_bytes = 0
@@ -204,8 +202,10 @@ def main() -> int:
     print(f"{verb} {total_removed} files, {human_size(total_bytes)}.")
 
     if not args.apply and total_removed:
-        print("Re-run with --apply to delete. Kill TensorBoard first: it holds "
-              "Windows handles on these directories and the deletes silently fail.")
+        print(
+            "Re-run with --apply to delete. Kill TensorBoard first: it holds "
+            "Windows handles on these directories and the deletes silently fail."
+        )
 
     return 0
 

@@ -126,6 +126,7 @@ class ContractError(RuntimeError):
 # Reading the contract out of the repository
 # --------------------------------------------------------------------------
 
+
 def _read_int_const(source: Path, name: str) -> int:
     text = source.read_text(encoding="utf-8")
     match = re.search(rf"\b{name}\s*=\s*([0-9]+)\s*;", text)
@@ -164,9 +165,7 @@ def read_quarterback_behavior() -> str:
     group = match.group(1)
     names = read_behavior_names()
     if group not in names:
-        raise ContractError(
-            f"HasQuarterbackActions names group '{group}', which BehaviorNameOf never returns"
-        )
+        raise ContractError(f"HasQuarterbackActions names group '{group}', which BehaviorNameOf never returns")
     return group
 
 
@@ -183,9 +182,7 @@ def read_defense_behavior() -> str:
 
     group = match.group(1)
     if group not in read_behavior_names():
-        raise ContractError(
-            f"HasDefenseCallActions names group '{group}', which BehaviorNameOf never returns"
-        )
+        raise ContractError(f"HasDefenseCallActions names group '{group}', which BehaviorNameOf never returns")
     return group
 
 
@@ -252,11 +249,9 @@ def expected_contract() -> dict:
 # Reading the contract out of an .onnx
 # --------------------------------------------------------------------------
 
+
 def _tensor_dims(value_info) -> list:
-    return [
-        dim.dim_value if dim.dim_value else dim.dim_param
-        for dim in value_info.type.tensor_type.shape.dim
-    ]
+    return [dim.dim_value if dim.dim_value else dim.dim_param for dim in value_info.type.tensor_type.shape.dim]
 
 
 def inspect_onnx(path: Path) -> dict:
@@ -270,7 +265,8 @@ def inspect_onnx(path: Path) -> dict:
     # sensor and the vector sensor are told apart by width, not by index, because
     # sensor ordering is not part of any documented contract.
     observation_widths = sorted(
-        dims[1] for name, dims in inputs.items()
+        dims[1]
+        for name, dims in inputs.items()
         if name.startswith("obs_") and len(dims) == 2 and isinstance(dims[1], int)
     )
 
@@ -342,14 +338,10 @@ def validate(behavior: str, path: Path, contract: dict) -> list[str]:
         )
 
     wanted_continuous = (
-        0 if is_coordinator
-        else contract["quarterback_continuous"] if is_quarterback
-        else contract["base_continuous"]
+        0 if is_coordinator else contract["quarterback_continuous"] if is_quarterback else contract["base_continuous"]
     )
     if actual["continuous"] != wanted_continuous:
-        problems.append(
-            f"continuous actions {actual['continuous']} != expected {wanted_continuous}"
-        )
+        problems.append(f"continuous actions {actual['continuous']} != expected {wanted_continuous}")
 
     # Revision 16: the quarterback has [call, throw], the coordinator the front,
     # every other brain the pitch alone.
@@ -371,8 +363,7 @@ def validate(behavior: str, path: Path, contract: dict) -> list[str]:
         problems.append(
             "no discrete_actions output — "
             + (
-                "this brain cannot call a play at all, so every down decodes to "
-                "whatever index 0 means"
+                "this brain cannot call a play at all, so every down decodes to whatever index 0 means"
                 if is_quarterback
                 else "the coordinator cannot call a front"
                 if is_defense
@@ -381,9 +372,7 @@ def validate(behavior: str, path: Path, contract: dict) -> list[str]:
         )
     elif actual["branches_are_exact"]:
         if actual["branches"] != wanted_branches:
-            problems.append(
-                f"discrete branches {actual['branches']} != expected {wanted_branches}"
-            )
+            problems.append(f"discrete branches {actual['branches']} != expected {wanted_branches}")
     elif actual["branches"] != [sum(wanted_branches)]:
         # Degraded comparison: only the total width could be read, so this
         # catches a resized branch but not two branches that swapped sizes.
@@ -399,6 +388,7 @@ def validate(behavior: str, path: Path, contract: dict) -> list[str]:
 # --------------------------------------------------------------------------
 # Promotion
 # --------------------------------------------------------------------------
+
 
 def latest_checkpoint(run_dir: Path, behavior: str) -> Path:
     """
@@ -436,10 +426,7 @@ def speed_clamp_rate(run_dir: Path, behavior: str) -> float:
             EventAccumulator,
         )
     except ImportError as error:
-        raise ContractError(
-            "tensorboard is not importable in this interpreter; it is in "
-            "requirements.txt"
-        ) from error
+        raise ContractError("tensorboard is not importable in this interpreter; it is in requirements.txt") from error
 
     behavior_dir = run_dir / behavior
     if not any(behavior_dir.glob("events.out.tfevents.*")):
@@ -481,8 +468,9 @@ def game_wide_speed_clamp_rate(run_dir: Path, behavior: str, behaviors: list) ->
                 rate = speed_clamp_rate(run_dir, other)
             except ContractError:
                 continue
-            print(f"  {behavior:<20} {SPEED_CLAMP_TAG} not written; read the game-wide "
-                  f"series from {other} ({rate:.4f})")
+            print(
+                f"  {behavior:<20} {SPEED_CLAMP_TAG} not written; read the game-wide series from {other} ({rate:.4f})"
+            )
             return rate
         raise own_error
 
@@ -509,8 +497,7 @@ def check_realism(report_path: Path, target_dir: Path | None) -> int:
     for game in games:
         first_downs = game.get("first_downs")
         plays = game.get("scrimmage_plays") or 0
-        game["first_downs_per_play"] = (
-            first_downs / plays if first_downs is not None and plays > 0 else None)
+        game["first_downs_per_play"] = first_downs / plays if first_downs is not None and plays > 0 else None
 
     def mean_of(key):
         values = [game.get(key) for game in games]
@@ -520,8 +507,14 @@ def check_realism(report_path: Path, target_dir: Path | None) -> int:
 
     means = {
         key: mean_of(key)
-        for key in ("yards_per_play", "touchdowns_per_drive", "fourth_downs",
-                    "rush_yards_per_carry", "completion_rate", "first_downs_per_play")
+        for key in (
+            "yards_per_play",
+            "touchdowns_per_drive",
+            "fourth_downs",
+            "rush_yards_per_carry",
+            "completion_rate",
+            "first_downs_per_play",
+        )
     }
 
     verdict_lines = []
@@ -531,7 +524,8 @@ def check_realism(report_path: Path, target_dir: Path | None) -> int:
         value = means[key]
         if value is None:
             verdict_lines.append(
-                f"- {key.replace('_', ' ')}: not in this report (band {low:.2f}-{high:.2f}, not judged)")
+                f"- {key.replace('_', ' ')}: not in this report (band {low:.2f}-{high:.2f}, not judged)"
+            )
             continue
         inside = low <= value <= high
         failed |= not inside
@@ -542,12 +536,13 @@ def check_realism(report_path: Path, target_dir: Path | None) -> int:
 
     verdict_lines.append(f"- fourth downs per game: **{means['fourth_downs']:.1f}** (reported, not judged)")
 
-    print(f"Realism over {len(games)} games "
-          f"(contract revision {report.get('contract_revision', '?')}):")
+    print(f"Realism over {len(games)} games (contract revision {report.get('contract_revision', '?')}):")
 
     if not report.get("brains_loaded", False):
-        print("  NOTE: no brain table matched the contract when these games were "
-              "played, so this judged the HEURISTIC, not a trained brain.")
+        print(
+            "  NOTE: no brain table matched the contract when these games were "
+            "played, so this judged the HEURISTIC, not a trained brain."
+        )
     for line in verdict_lines:
         print("  " + line[2:].replace("**", ""))
 
@@ -573,8 +568,7 @@ def check_realism(report_path: Path, target_dir: Path | None) -> int:
         print(f"  appended to {manifest.relative_to(REPO_ROOT).as_posix()}")
 
     if failed:
-        print("REALISM FAILED: the game these players produced is not football. "
-              "Do not ship a brain that fails this.")
+        print("REALISM FAILED: the game these players produced is not football. Do not ship a brain that fails this.")
         return 1
 
     print("REALISM PASSED.")
@@ -583,16 +577,12 @@ def check_realism(report_path: Path, target_dir: Path | None) -> int:
 
 def git_commit() -> str:
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
-        ).strip()
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
 
 
-def write_manifest(
-    target_dir: Path, run: str, num_envs: int, sources: dict, contract: dict
-) -> None:
+def write_manifest(target_dir: Path, run: str, num_envs: int, sources: dict, contract: dict) -> None:
     """
     The manifest CLAUDE.md §1 requires. Football_v01 shipped without one, which is
     why nobody could tell that its brains predated the contract they ran against.
@@ -602,8 +592,7 @@ def write_manifest(
     lines = [
         f"# {target_dir.name}",
         "",
-        f"Promoted {datetime.date.today().isoformat()} from `results/{run}` "
-        f"at repository commit `{git_commit()}`.",
+        f"Promoted {datetime.date.today().isoformat()} from `results/{run}` at repository commit `{git_commit()}`.",
         "",
         "## Contract",
         "",
@@ -652,9 +641,7 @@ def verify_promoted(contract: dict) -> int:
     mismatched through an entire debugging effort that was looking for a training
     problem.
     """
-    directories = sorted(
-        d for d in AGENTS_DIR.iterdir() if d.is_dir() and any(d.glob("*.onnx"))
-    )
+    directories = sorted(d for d in AGENTS_DIR.iterdir() if d.is_dir() and any(d.glob("*.onnx")))
     if not directories:
         print(f"No promoted brains found under {AGENTS_DIR.relative_to(REPO_ROOT).as_posix()}.")
         return 0
@@ -712,25 +699,32 @@ def main() -> int:
     parser.add_argument("--run", help="run id under results/, e.g. football_base04")
     parser.add_argument("--version", help="two-digit version, e.g. 02")
     parser.add_argument(
-        "--num-envs", type=int,
+        "--num-envs",
+        type=int,
         help="the --num-envs the run used. Recorded in MANIFEST.md; it changes batching.",
     )
     parser.add_argument("--name", default="Football", help="agent family name")
     parser.add_argument(
-        "--from", dest="from_dir", type=Path, metavar="DIR",
+        "--from",
+        dest="from_dir",
+        type=Path,
+        metavar="DIR",
         help="promote <behavior>.onnx from DIR instead of the run's final export -- "
-             "e.g. results/<run>/final_weights/best_realism_<step>, the checkpoint "
-             "Tools/checkpoint_realism.py judged best. Shape and speed-clamp gates still apply.",
+        "e.g. results/<run>/final_weights/best_realism_<step>, the checkpoint "
+        "Tools/checkpoint_realism.py judged best. Shape and speed-clamp gates still apply.",
     )
     parser.add_argument("--dry-run", action="store_true", help="validate, write nothing")
     parser.add_argument(
-        "--verify", action="store_true",
+        "--verify",
+        action="store_true",
         help="audit the brains already in Assets/Agents/ against the current contract",
     )
     parser.add_argument(
-        "--check-realism", type=Path, metavar="REPORT",
+        "--check-realism",
+        type=Path,
+        metavar="REPORT",
         help="judge a results/realism/*.json from Unity's Evaluate Realism tool; "
-             "with --version, record the verdict in that version's MANIFEST.md",
+        "with --version, record the verdict in that version's MANIFEST.md",
     )
     args = parser.parse_args()
 
@@ -748,8 +742,8 @@ def main() -> int:
         return verify_promoted(contract)
 
     missing_arguments = [
-        name for name, value in
-        (("--run", args.run), ("--version", args.version), ("--num-envs", args.num_envs))
+        name
+        for name, value in (("--run", args.run), ("--version", args.version), ("--num-envs", args.num_envs))
         if value is None
     ]
     if missing_arguments:
@@ -763,10 +757,11 @@ def main() -> int:
     print("Contract read from source:")
     print(f"  vector observations   {contract['vector_observations']}")
     print(f"  ray observations      {contract['ray_observations']}")
-    print(f"  continuous actions    {contract['base_continuous']} "
-          f"({contract['quarterback_continuous']} for {contract['quarterback_behavior']})")
-    print(f"  discrete branches     {contract['quarterback_branches']} "
-          f"on {contract['quarterback_behavior']} only")
+    print(
+        f"  continuous actions    {contract['base_continuous']} "
+        f"({contract['quarterback_continuous']} for {contract['quarterback_behavior']})"
+    )
+    print(f"  discrete branches     {contract['quarterback_branches']} on {contract['quarterback_behavior']} only")
     print()
 
     sources: dict[str, Path] = {}
@@ -822,8 +817,7 @@ def main() -> int:
     target_dir = AGENTS_DIR / f"{args.name}_v{args.version}"
 
     if args.dry_run:
-        print(f"All {len(sources)} brains match the contract. "
-              f"--dry-run set, so {target_dir.name} was not written.")
+        print(f"All {len(sources)} brains match the contract. --dry-run set, so {target_dir.name} was not written.")
         return 0
 
     target_dir.mkdir(parents=True, exist_ok=True)

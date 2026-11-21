@@ -82,7 +82,7 @@ def read_role_switch(function: str) -> dict:
     start = text.find(f"public static float {function}(Systems_PlayerRole role)")
     if start < 0:
         raise SystemExit(f"{function} not found in {ROLE_TABLE.name}")
-    body = text[start:text.find("\n        }\n", start)]
+    body = text[start : text.find("\n        }\n", start)]
 
     values, pending, default = {}, [], None
     for line in body.splitlines():
@@ -175,10 +175,14 @@ def main() -> int:
     speeds = read_role_switch("TopSpeedOf")
 
     rows = []
-    print(f"LINEAR_DAMPING {linear} (tau {1 / linear:.2f} s), LINE_LINEAR_DAMPING {line} "
-          f"(tau {1 / line:.2f} s), tick {TICK}s\n")
-    print(f"{'role':14} {'V m/s':>6} {'t90':>5} {'10yd':>12} {'40yd':>12} "
-          f"{'coast':>6} {'brake':>6}  {'fit d':>5}  {'fit V,d':>9}")
+    print(
+        f"LINEAR_DAMPING {linear} (tau {1 / linear:.2f} s), LINE_LINEAR_DAMPING {line} "
+        f"(tau {1 / line:.2f} s), tick {TICK}s\n"
+    )
+    print(
+        f"{'role':14} {'V m/s':>6} {'t90':>5} {'10yd':>12} {'40yd':>12} "
+        f"{'coast':>6} {'brake':>6}  {'fit d':>5}  {'fit V,d':>9}"
+    )
 
     far_off = 0
     for role, (ref10, ref40) in REFERENCE.items():
@@ -197,28 +201,52 @@ def main() -> int:
         if too_slow:
             flag += ", V below the forty's average"
         far_off += bool(flag)
-        print(f"{role:14} {top:6.1f} {run['t90']:5.2f} "
-              f"{run['t10']:5.2f} ({slow10:+4.0%}) {run['t40']:5.2f} ({slow40:+4.0%}) "
-              f"{run['stop']:5.1f}m {braked['stop']:5.1f}m  {fit:5.2f}  {fit_top:4.1f},{fit_damping:4.2f}{flag}")
-        rows.append({
-            "role": role, "top_speed": top, "damping": damping,
-            "t90": run["t90"], "t10": run["t10"], "t40": run["t40"],
-            "ref10": ref10, "ref40": ref40, "coast_stop_m": run["stop"],
-            "brake_stop_m": braked["stop"], "best_fit_damping": fit,
-            "joint_fit_top_speed": fit_top, "joint_fit_damping": fit_damping,
-            "top_speed_below_forty_average": too_slow,
-        })
+        print(
+            f"{role:14} {top:6.1f} {run['t90']:5.2f} "
+            f"{run['t10']:5.2f} ({slow10:+4.0%}) {run['t40']:5.2f} ({slow40:+4.0%}) "
+            f"{run['stop']:5.1f}m {braked['stop']:5.1f}m  {fit:5.2f}  {fit_top:4.1f},{fit_damping:4.2f}{flag}"
+        )
+        rows.append(
+            {
+                "role": role,
+                "top_speed": top,
+                "damping": damping,
+                "t90": run["t90"],
+                "t10": run["t10"],
+                "t40": run["t40"],
+                "ref10": ref10,
+                "ref40": ref40,
+                "coast_stop_m": run["stop"],
+                "brake_stop_m": braked["stop"],
+                "best_fit_damping": fit,
+                "joint_fit_top_speed": fit_top,
+                "joint_fit_damping": fit_damping,
+                "top_speed_below_forty_average": too_slow,
+            }
+        )
 
-    print(f"\n{far_off} of {len(REFERENCE)} roles more than {TOLERANCE:.0%} slower than the "
-          f"reference over 10 or 40 yards.")
-    print("A damping change is a dynamics change: contract revision, every brain refused,"
-          " and it must be judged on the 4-seed realism line before it is kept.")
+    print(
+        f"\n{far_off} of {len(REFERENCE)} roles more than {TOLERANCE:.0%} slower than the "
+        f"reference over 10 or 40 yards."
+    )
+    print(
+        "A damping change is a dynamics change: contract revision, every brain refused,"
+        " and it must be judged on the 4-seed realism line before it is kept."
+    )
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps({
-            "linear_damping": linear, "line_linear_damping": line, "roles": rows,
-        }, indent=2), encoding="utf-8")
+        args.json.write_text(
+            json.dumps(
+                {
+                    "linear_damping": linear,
+                    "line_linear_damping": line,
+                    "roles": rows,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         print(f"wrote {args.json}")
 
     return 1 if far_off else 0
