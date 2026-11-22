@@ -56,6 +56,20 @@
 - **Repo-specific exception:** PoFootball is a 2D `Rigidbody2D` ML-Agents game: no articulated skeleton, joints,
   PD actuators or head to gaze-track. Phone builds are portrait-locked; only the browser build adapts to landscape.
 
+### Deliberate deviations
+
+| Deviation | Why | Commit sha / date | How to undo |
+| --- | --- | --- | --- |
+| Layout moved to `Assets/_Project/...` + `/Training`, overriding the owner's 2026-11-21 note that kept the old `Assets/{Agents,Art,Scripts,Scenes,UI Toolkit}` tree | the v3 layout rule is newer; paths rewritten, GUIDs kept | `7863c72` 2026-11-22 | `git revert 7863c72` |
+| 2D `Rigidbody2D` game: no articulated skeleton, PD actuators or gaze tracking | owner exception (physics rule N/A) | — | — |
+| Phone builds stay portrait 9:16; only the browser build fills 16:9 (UI scales on height) | owner's portrait rule kept for phones; v3 16:9 rule for the web | `7863c72` 2026-11-22 | `Systems_ScreenView.ApplyBrowserAspect` |
+| Unity build and tests run locally only; CI runs the Python checks and deploys the locally built `webgl-*` release | Unity cannot be licensed in CI (owner design) | `433cb63` 2026-11-22 | — |
+| PlayMode runs with `-force-d3d11`, `CI=true`, `UNITY_MCP_KEEP_CONNECTED=false` | D3D12 device loss; the MCP bridge's auth error otherwise fails a random test | 2026-11-22 | — |
+| Release WebGL shows only the STATS chip (RL readout); the findings sheet stays development-build only | owner gated the findings sheet | `7863c72` 2026-11-22 | — |
+
+**Hosting:** Azure Static Web App `pofootball`, Free tier. Never run test suites against the live site; live checks =
+at most 6 page loads + /diag + X-Commit.
+
 ## 2. Concurrent work
 
 - Only `master` exists locally and on GitHub.
@@ -66,6 +80,16 @@
 - Ask before renaming or deleting Azure resources or rewriting git history.
 
 ## 3. Verify the repo (exact commands, from the repo root)
+
+One command sequence verifies the repo (Python checks, then EditMode and PlayMode in batch mode; close the Editor first):
+
+```powershell
+$env:CI = 'true'; $env:UNITY_MCP_KEEP_CONNECTED = 'false'; $u = "C:\Program Files\Unity\Hub\Editor\6000.6.9f1\Editor\Unity.exe"
+uv run ruff format --check . && uv run ruff check . && uv run pytest -q && & $u -batchmode -nographics -projectPath . -runTests -testPlatform EditMode -assemblyNames PoFootball.Tests.EditMode -testResults Logs/editmode.xml -logFile Logs/editmode.log && & $u -batchmode -force-d3d11 -projectPath . -runTests -testPlatform PlayMode -assemblyNames PoFootball.Tests.PlayMode -testResults Logs/playmode.xml -logFile Logs/playmode.log
+```
+
+Last full run (2026-11-22): pytest 4 passed; EditMode 420/420; PlayMode batch 34 passed, 6 skipped (HUD-only);
+PlayMode in the Editor 40/40.
 
 Before any Unity test run, in the same PowerShell session: `$env:CI = 'true'; $env:UNITY_MCP_KEEP_CONNECTED = 'false'`.
 The MCP bridge (`com.ivanmurzak.unity.mcp`) otherwise reconnects mid-run and its "Authorization failed" error log fails

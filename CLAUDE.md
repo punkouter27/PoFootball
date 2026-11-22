@@ -46,7 +46,7 @@ Unity ML-Agents self-play.
 
 ## 3. Display
 - UI Toolkit only — no UGUI, no IMGUI, no `.uxml`/`.uss`. Screens built from C# at runtime.
-- Portrait 9:16, 60 FPS (`vSyncCount = 0` or `targetFrameRate` is ignored).
+- Portrait 9:16 on phones (the browser build also fills 16:9), 60 FPS (`vSyncCount = 0` or `targetFrameRate` is ignored).
 - **One status HUD, five corners, every player-facing screen** — title top-left, FPS
   top-centre, MENU top-right, DEBUG bottom-left, `Application.version` bottom-right.
   It is spawned by `Systems_StatusHudBootstrap`, not authored in the scenes, so the
