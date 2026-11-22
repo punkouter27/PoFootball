@@ -189,7 +189,7 @@ against the RTX 2060. Recreate from `requirements.txt`.
 ## Git
 
 - `.gitignore` — Unity template plus `.venv/`, `results/`, `runs/`, TensorBoard
-  events, `.claude/state/`, `.ai-game-dev/`; re-includes `Assets/Agents/**/*.onnx`.
+  events, `.claude/state/`, `.ai-game-dev/`; re-includes `Assets/_Project/RL_Models/**/*.onnx`.
 - `.gitattributes` — Unity template plus `*.onnx`/`*.nn` through LFS and
   `*.yaml`/`*.py` forced to LF.
 - Unity SmartMerge is registered as the `unityyamlmerge` driver, so conflicting

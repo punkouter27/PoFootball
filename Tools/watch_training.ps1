@@ -15,11 +15,11 @@
 # hangs with no error.
 #
 #   powershell -File Tools\watch_training.ps1 -RunId football_base05 `
-#       -Config Config\FootballBase05.yaml -Hours 8
+#       -Config Training\FootballBase05.yaml -Hours 8
 
 param(
     [string]$RunId  = "football_base05",
-    [string]$Config = "Config\FootballBase05.yaml",
+    [string]$Config = "Training\FootballBase05.yaml",
     [int]   $NumEnvs = 6,
     [int]   $BasePort = 5010,
     [double]$Hours = 8.0,

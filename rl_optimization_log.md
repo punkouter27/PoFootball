@@ -17,7 +17,7 @@ grep -rIl -iE "mujoco|mjcf|gymnasium|stable.baselines|SubprocVecEnv" \
 ```
 
 The only `.xml` files in the tree are three Kenney sprite-sheet atlases under
-`Assets/Art/Kenney/SportsPack/Spritesheet/`. There is no Python environment code:
+`Assets/_Project/Environments/Art/Kenney/SportsPack/Spritesheet/`. There is no Python environment code:
 the nine `.py` files under `Tools/` are audit and promotion utilities, none of
 which defines a step function, an observation space, or a reward.
 
@@ -30,12 +30,12 @@ remapped:
 | Goal term | Actual artifact here |
 |---|---|
 | MJCF XML model | `Systems_SimConstants.cs`, `Systems_RoleTable.cs`, `ProjectSettings/Physics2DSettings.asset` |
-| Python env code | `Assets/Scripts/Agent/Agent_FootballPlayer.cs` (2070 lines) |
-| Observation space | `Assets/Scripts/Sensor/Sensor_FootballState.cs` + `RayPerceptionSensor2D` |
-| Reward terms | `Assets/Scripts/Reward/Reward_{Progress,Call,Role,Terminal}.cs` |
+| Python env code | `Assets/_Project/Agents/Agent/Agent_FootballPlayer.cs` (2070 lines) |
+| Observation space | `Assets/_Project/Agents/Sensor/Sensor_FootballState.cs` + `RayPerceptionSensor2D` |
+| Reward terms | `Assets/_Project/Agents/Reward/Reward_{Progress,Call,Role,Terminal}.cs` |
 | `<option timestep>` / solver | `ProjectSettings/TimeManager.asset`, `Physics2DSettings.asset` |
 | SubprocVecEnv | `mlagents-learn --env ... --num-envs N` (separate OS processes) |
-| PPO/SAC hyperparameters | `Config/archive/FootballBase11.yaml` |
+| PPO/SAC hyperparameters | `Training/archive/FootballBase11.yaml` |
 
 **PPO is not the main trainer.** Two of the three behaviors use **MA-POCA**
 (`trainer_type: poca`), a centralized-critic multi-agent algorithm. Only the
@@ -59,7 +59,7 @@ scoped to POCA/PPO, not SAC.
    `numpy 1.23.5` — the pins that keep the `.onnx` export path working.
 
 2. **No `Builds/FootballEnv` existed.** `Builds/` was empty, so headless
-   training could not start at all. `Config/archive/FootballBase11.yaml` itself warns
+   training could not start at all. `Training/archive/FootballBase11.yaml` itself warns
    the env must be rebuilt for revision 8 and that the handshake will *not*
    catch a stale one, because revision 8 changed dynamics with every shape
    identical. Built via the running Editor.
@@ -264,7 +264,7 @@ Per-tick cost: six adds, one compare, one clamp, one magnitude. No allocation.
 ## Phase 1 — Baseline throughput (uninstrumented build)
 
 Run `baseline_probe`, 4 headless envs, `--base-port=5400`, `CUDA_VISIBLE_DEVICES=-1`,
-`Config/archive/FootballBase11.yaml` unmodified.
+`Training/archive/FootballBase11.yaml` unmodified.
 
 | Behavior | Step 20k @ | Step 40k @ | Steady-state rate |
 |---|---|---|---|
@@ -644,7 +644,7 @@ which was not demonstrable before this session because no `.venv` existed.
 Every variant is `FootballBase11.yaml` with **exactly one** parameter changed,
 run to 60,000 `Offense`/`Defense` steps (6,000 for the single-agent
 `Quarterback`, scaled by agent count so all three behaviors finish together).
-4 envs, sequential, `--force`, ~3m20s each. Configs in `Config/archive/experiments/`.
+4 envs, sequential, `--force`, ~3m20s each. Configs in `Training/archive/experiments/`.
 
 | KPI | V0 control | V1 lr 1e-3 | V2 beta 1e-3 | V3 beta 2e-2 | V4 horizon 32 | **V5 batch 512** |
 |---|---|---|---|---|---|---|
@@ -792,7 +792,7 @@ command for 4 of every 5 ticks. There is no chatter in this system to penalize.
 
 ## Phase 2, E6 — Long run `football_long01`
 
-`Config/archive/FootballLong01.yaml`, `--num-envs=4`, `--base-port=6000`,
+`Training/archive/FootballLong01.yaml`, `--num-envs=4`, `--base-port=6000`,
 `CUDA_VISIBLE_DEVICES=-1`. Two deviations from the `FootballBase11` anchor, both
 carried over from the measurements above:
 
@@ -811,7 +811,7 @@ Checkpointing and ONNX export are working on schedule
 
 | Tool | Result |
 |---|---|
-| `Tools/promote_brain.py --verify` | Runs, exits 0, reports *"No promoted brains found under Assets/Agents"* — correct, and consistent with `CLAUDE.md`'s statement that nothing is promoted |
+| `Tools/promote_brain.py --verify` | Runs, exits 0, reports *"No promoted brains found under Assets/_Project/RL_Models"* — correct, and consistent with `CLAUDE.md`'s statement that nothing is promoted |
 | `Tools/watch_entropy.py --run football_long01` | Runs, exits 0 |
 | `Tools/prune_results.py` | Not exercised (no disk pressure) |
 
@@ -1340,7 +1340,7 @@ to how a throw resolves is a behavioural contract change requiring a
   user's call.
 - Shut down in the order `CLAUDE.md` §4 requires: trainer → envs → TensorBoard.
   Zero `PoFootball.exe` and zero TensorBoard processes remain.
-- Nothing was promoted. `Assets/Agents/` is untouched and every player still
+- Nothing was promoted. `Assets/_Project/RL_Models/` is untouched and every player still
   runs `Heuristic`, exactly as before this session. Promoting would require
   `Tools/promote_brain.py --run football_long01` followed by
   **`Tools > PoFootball > Build Brain Table`** in the Editor — and on this

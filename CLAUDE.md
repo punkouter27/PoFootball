@@ -26,10 +26,11 @@ Unity ML-Agents self-play.
 # UNITY_RULES — ML-Agents Physics Simulation
 
 ## 1. Naming
-- `Assets/Agents/<Name>_v<NN>/` — `.onnx`, `*_Character.asset`, `MANIFEST.md`.
-- Four script prefixes, each matching its folder under `Assets/Scripts/`: `Agent_`,
+- `Assets/_Project/RL_Models/<Name>_v<NN>/` — `.onnx`, `*_Character.asset`, `MANIFEST.md`.
+- Four script prefixes, each matching its folder (`Assets/_Project/Agents/{Agent,Sensor,Reward}`,
+  `Assets/_Project/Core/Systems`, `Assets/_Project/UI/View`): `Agent_`,
   `Sensor_`, `Reward_`, `Systems_` (referees, presentation, UI — the largest).
-  `Assets/Editor/` follows the same folder-matching rule: everything there is
+  `Assets/_Project/Core/Editor/` follows the same folder-matching rule: everything there is
   `Editor_`, and every menu item hangs off the single root `Tools/PoFootball/`.
 - Scenes `SCN_`; training `SCN_TRAIN_<NAME>`, no suffixes. Envs `Builds/<Name>Env/`;
   configs `<Name><Phase><NN>.yaml` paired 1:1 with run-id `<name>_<phase><nn>`.
@@ -77,28 +78,28 @@ Unity ML-Agents self-play.
 - Overwrite `.onnx` in place to preserve `.meta` GUIDs.
 - Headless: `--env --no-graphics` + explicit `--base-port` (envs take consecutive ports; collisions hang). 4–8 envs, leaving cores for torch. `--num-envs` changes how experience is batched — record it.
 - Telemetry over HTTP *and* `StatsRecorder` (`Agent_Telemetry`, a component on `/Systems` in `SCN_TRAIN_FOOTBALL` only). Kill TensorBoard before `--force`: it holds Windows handles and the wipe silently no-ops. Clean up trainer → envs → TensorBoard.
-- **Judge self-play on ELO, not mean reward** — *when self-play is actually running*. It is not, in any `FootballBase` config from base05 onward, so there is no `Self-play/ELO` for those; judge them on `Call/Entropy` and the play mix. The reason [docs/TRAINING_NOTES_base05.md](docs/TRAINING_NOTES_base05.md) gives for removing it — that ML-Agents self-play cannot model two different behaviors playing each other — is **wrong**: `GhostTrainer` handles one behavior per team, and the official `StrikersVsGoalie.yaml` is exactly that with `poca`. `Config/FootballSelf01.yaml` switches it back on as an experiment against the `football_base19` baseline; its header has the settings, the likely real cause of the base04 stall, and why its ELO is a trend and not a win rate.
+- **Judge self-play on ELO, not mean reward** — *when self-play is actually running*. It is not, in any `FootballBase` config from base05 onward, so there is no `Self-play/ELO` for those; judge them on `Call/Entropy` and the play mix. The reason [docs/TRAINING_NOTES_base05.md](docs/TRAINING_NOTES_base05.md) gives for removing it — that ML-Agents self-play cannot model two different behaviors playing each other — is **wrong**: `GhostTrainer` handles one behavior per team, and the official `StrikersVsGoalie.yaml` is exactly that with `poca`. `Training/FootballSelf01.yaml` switches it back on as an experiment against the `football_base19` baseline; its header has the settings, the likely real cause of the base04 stall, and why its ELO is a trend and not a win rate.
 
 ---
 
 ## How these rules land in this repo
 
-**Layout** (created; `Assets/Scripts/<X>/` holds the `<X>_*.cs` files):
+**Layout** (Po Unity standard since 2026-11-22; AGENTS.md section 1 has the full map):
 
 ```
-Assets/Agents/                 promoted brains: <Name>_v<NN>/{*.onnx, *_Character.asset, MANIFEST.md}
-                               — Football_v03 (rev 16) and v04 (rev 17), both refused; see below
-Assets/Scripts/Agent/          Agent_*.cs      — Agent subclasses, action application
-Assets/Scripts/Sensor/         Sensor_*.cs     — observation collection
-Assets/Scripts/Reward/         Reward_*.cs     — reward terms
-Assets/Scripts/Systems/        Systems_*.cs    — referee, game flow, UI (no ML-Agents dependency)
-Assets/Scripts/Systems/View/   Systems_*.cs    — UI Toolkit screens, audio, shape presentation
-Assets/Scenes/                 SCN_*.unity, SCN_TRAIN_*.unity — these three only
-Assets/Resources/              PoFootballPanelSettings, PoFootballRoleShapes, M_PoFootball*.mat
-                               — no PoFootballBrains yet; Build Brain Table writes it
+Assets/_Project/RL_Models/     promoted brains: <Name>_v<NN>/{*.onnx, MANIFEST.md}
+Assets/_Project/Agents/Agent/  Agent_*.cs      — Agent subclasses, action application
+Assets/_Project/Agents/Sensor/ Sensor_*.cs     — observation collection
+Assets/_Project/Agents/Reward/ Reward_*.cs     — reward terms (incl. Reward_Penalty, the control penalties)
+Assets/_Project/Core/Systems/  Systems_*.cs    — referee, game flow (no ML-Agents dependency); Model/ = pure data
+Assets/_Project/Core/Editor/   Editor_*.cs     — editor tools; Core/Tests/ the EditMode and PlayMode suites
+Assets/_Project/UI/View/       Systems_*.cs    — UI Toolkit screens, audio, shape presentation
+Assets/_Project/Scenes/        SCN_*.unity, SCN_TRAIN_*.unity — these three only
+Assets/_Project/Data/Resources/ PoFootballPanelSettings, PoFootballRoleShapes, PoFootballBrains,
+                               PoFootballRewardPenalties, PoFootballShowcase, M_PoFootball*.mat
 Builds/<Name>Env/              headless training envs (git-ignored) — FootballEnv only
-Config/<Name><Phase><NN>.yaml  trainer configs, 1:1 with run-id <name>_<phase><nn>
-Config/archive/                configs for superseded contracts; they will NOT run
+Training/<Name><Phase><NN>.yaml trainer configs, 1:1 with run-id <name>_<phase><nn>
+Training/archive/              configs for superseded contracts; they will NOT run
 results/<run-id>/MANIFEST.md   one per run — records --num-envs, which is part of the run's identity
 ```
 
@@ -109,10 +110,10 @@ legal throw, from 0.8 s to 1.5 s after the snap (`Systems_SimConstants.DROPBACK_
 arrive, so no run ever sacked anyone. `Agent_ActionContract` has the detail and
 [docs/CONTRACT_HISTORY.md](docs/CONTRACT_HISTORY.md) has the revisions before 17.
 
-- **`Config/FootballBase31.yaml` is the config to run** (run-id `football_base31`):
+- **`Training/FootballBase31.yaml` is the config to run** (run-id `football_base31`):
   every brain warm-started from Football_v04's own checkpoints (football_base28 at
   100k), no reward change, so the realism line reads the latch alone.
-- **`Assets/Agents/Football_v04`** (football_base28 at 100k, revision 17) is in the
+- **`Assets/_Project/RL_Models/Football_v04`** (football_base28 at 100k, revision 17) is in the
   brain table and passed 4 of 5 realism bands (rush 2.29 yd/carry), but the stamp
   refuses it in this revision 18 build. Revision 17's runs: base25-27 never threw;
   base28 threw (v04); base29/30 charged the fouler his own flag (`Reward_Terminal
@@ -124,7 +125,7 @@ arrive, so no run ever sacked anyone. `Agent_ActionContract` has the detail and
   4 h past a watcher HALT and was killed without exporting. Its end-of-run realism
   check still needs the Editor (`--realism-in-editor`, or run
   `Tools/checkpoint_realism.py --in-editor` afterwards).
-- **`Assets/Agents/Football_v03`** (from `football_base22`, revision 16) is on disk
+- **`Assets/_Project/RL_Models/Football_v03`** (from `football_base22`, revision 16) is on disk
   and committed, is NOT in a brain table and FAILED the realism gate on all five bands.
 - A run from an older revision is promoted only from the commit it was trained at;
   [docs/CONTRACT_HISTORY.md](docs/CONTRACT_HISTORY.md) names each one.
@@ -136,7 +137,7 @@ cannot write the ScriptableObject that lists them. `Agent_BrainTable
 .MatchesCurrentContract` checks the group set as well as the revision stamp, so a
 table cannot be made to load by re-stamping it by hand.
 
-Every config for an older contract is in `Config/archive/`.
+Every config for an older contract is in `Training/archive/`.
 
 **Judge balance on fixed seeds.** Games with a pinned seed (`Systems_GameLifetimeScope
 ._varySeedPerGame` off, `_episodeSeed` set) replay exactly, and today's single
@@ -245,7 +246,7 @@ recreate `.venv` (the two commands at the top of `requirements.txt`).
 
 # In-editor smoke test: start the trainer, then press Play.
 $env:CUDA_VISIBLE_DEVICES = "-1"     # MANDATORY on this machine. See below.
-mlagents-learn Config\FootballBase26.yaml --run-id=football_base26
+mlagents-learn Training\FootballBase26.yaml --run-id=football_base26
 
 # Headless sweep — envs take CONSECUTIVE ports from --base-port.
 # REBUILD Builds/FootballEnv FIRST whenever the contract revision moved:
@@ -254,7 +255,7 @@ mlagents-learn Config\FootballBase26.yaml --run-id=football_base26
 # stale env is NOT always refused by the handshake. That rebuild is on you.
 # --num-envs=4: measured 257.7 / 255.1 / 236.3 steps/s at 2 / 4 / 12 envs
 # (rl_optimization_log.md); the trainer is the bottleneck.
-mlagents-learn Config\FootballBase26.yaml --run-id=football_base26 `
+mlagents-learn Training\FootballBase26.yaml --run-id=football_base26 `
   --env=Builds\FootballEnv\PoFootball.exe --no-graphics `
   --base-port=5400 --num-envs=4
 
@@ -326,7 +327,7 @@ every brain's observations as ML-Agents `.demo` files and `Tools/audit_observati
 reports clamped, constant and duplicated floats; it has not been run on real data yet
 (the Editor was closed for base24).
 
-`Tools > PoFootball > Sim Speed > 8x` (editor-only, `Assets/Editor/Editor_SimSpeed.cs`)
+`Tools > PoFootball > Sim Speed > 8x` (editor-only, `Assets/_Project/Core/Editor/Editor_SimSpeed.cs`)
 turns a full game from ~10 minutes into ~100 seconds. It raises `Time.timeScale`
 only — `fixedDeltaTime` is untouched, so it is the same measurement — and it always
 resets to 1x on leaving play mode.
@@ -368,7 +369,7 @@ given it picks `"cuda"` whenever a GPU is visible and calls
 for `cpu`, the `else` branch only sets the dtype — it never puts the default device
 back. Hiding the GPU is what fixes it. Use `-1`; an empty string is ignored on Windows.
 
-`Config/archive/FootballBase06.yaml` (long superseded — the live config is
+`Training/archive/FootballBase06.yaml` (long superseded — the live config is
 `FootballBase26.yaml`, four behaviors, revision 17) carried **six** behaviors. The quarterback has its own brain
 — it is the only one with discrete actions, and while it shared `OffenseSkill`
 with the backs and receivers its play-call gradient was diluted five to one and
@@ -393,7 +394,7 @@ the runtime loads a mismatched one without complaint, so never copy one in by
 hand:
 
 ```powershell
-# audit what is already in Assets/Agents/ against the current contract
+# audit what is already in Assets/_Project/RL_Models/ against the current contract
 .venv\Scripts\python.exe Tools\promote_brain.py --verify
 
 # promote — refuses unless every brain's observation and action shapes match,
@@ -424,7 +425,7 @@ cannot drift from the contract it guards. (The ray width came from the training
 scene until revision 10; `Agent_FootballPlayer` now applies `Sensor_RayContract`
 over whatever the scenes say.) It also refuses a run whose `Control/SpeedClampRate`
 averaged above 0.001 over its last five summaries — a policy exploiting solver
-blow-ups — and `--check-realism` judges the promoted brains' REALISM line. The deleted `Assets/Agents/Football_v01`
+blow-ups — and `--check-realism` judges the promoted brains' REALISM line. The deleted `Assets/_Project/RL_Models/Football_v01`
 is the reason it exists: those four brains came from `football_base02` at ~500k
 steps against a contract that had since changed, the shipped `OffenseSkill.onnx`
 had no discrete output at all, and the resulting "quarterback calls the same play
@@ -449,9 +450,9 @@ Always scope to this project's assemblies — unfiltered is 370 tests, 232 of th
 from `com.besty.unity-skills`, one of which fails for unrelated reasons:
 
 ```powershell
-# EditMode (Assets/Tests/EditMode). Blocks the Editor's main thread — pass a long timeout.
+# EditMode (Assets/_Project/Core/Tests/EditMode). Blocks the Editor's main thread — pass a long timeout.
 unity command --timeout 600 run_tests --mode editor --filter PoFootball --filter_type assembly
-# PlayMode (Assets/Tests/PlayMode). Must be async; poll test_status until "completed".
+# PlayMode (Assets/_Project/Core/Tests/PlayMode). Must be async; poll test_status until "completed".
 unity command run_tests --mode playmode --async_tests --filter PoFootball --filter_type assembly
 ```
 
@@ -540,7 +541,7 @@ blocks the one artifact whose job is to get onto a phone today. That build logs 
 
 | Tool | What it does |
 |---|---|
-| *Tools → PoFootball → Configure Android Release Settings* | One-shot: identity, SDK levels, orientation, and the launcher icons (adaptive + round + legacy, 6 densities) from `Assets/Icons/`. Re-run after changing icon art |
+| *Tools → PoFootball → Configure Android Release Settings* | One-shot: identity, SDK levels, orientation, and the launcher icons (adaptive + round + legacy, 6 densities) from `Assets/_Project/UI/Icons/`. Re-run after changing icon art |
 | *Tools → PoFootball → Build Android AAB (Play release)* | Signed bundle → `Builds/Android/PoFootball.aab`. Logs `AAB BUILD RESULT:` |
 | *Tools → PoFootball → Build Android APK* | Sideloadable APK on the SAME key, so it installs over a Play build → `Builds/Android/PoFootball.apk`. Logs `BUILD RESULT:` |
 | *Tools → PoFootball → Build Android APK (development)* | The same APK with Development Build on — the only artifact where `Debug.isDebugBuild` is true and therefore the only one whose DEBUG sheet appears. This is what goes on a test handset |
@@ -555,8 +556,8 @@ ml-agents versions must stay in exact parity.
 
 `Editor_BuildAndroidAAB.SHIP_SCENES` names the player's scenes in boot order:
 
-  0. `Assets/Scenes/SCN_MENU.unity`
-  1. `Assets/Scenes/SCN_GAME.unity`
+  0. `Assets/_Project/Scenes/SCN_MENU.unity`
+  1. `Assets/_Project/Scenes/SCN_GAME.unity`
 
 It is a hardcoded list, not whatever is ticked in Build Settings, because Build
 Settings also carries SCN_TRAIN_FOOTBALL — training scenes that would bloat the bundle
@@ -565,7 +566,7 @@ here that is missing on disk **aborts** the build.
 
 ### The icons
 
-`Assets/Icons/` holds `AppIcon_Adaptive_Background.png` and
+`Assets/_Project/UI/Icons/` holds `AppIcon_Adaptive_Background.png` and
 `AppIcon_Adaptive_Foreground.png` (432x432, the API 26+ pair) and
 `AppIcon_Legacy.png` (512x512, round and pre-adaptive launchers). The adaptive
 FOREGROUND art must stay inside the middle 66% of its canvas — every OEM launcher

@@ -1,0 +1,450 @@
+using UnityEngine;
+using UnityEngine.UIElements;
+
+namespace PoFootball.Views
+{
+    /// <summary>
+    /// Base for every UI Toolkit screen. Owns the UIDocument, resolves the shared
+    /// PanelSettings, applies the device safe area, and hands the subclass a root
+    /// to build into.
+    ///
+    /// The document and its panel settings are attached in code rather than
+    /// authored on the GameObject. A screen is then a single component drop with no
+    /// inspector wiring to forget, which is what keeps the scenes buildable through
+    /// MCP tools instead of by hand.
+    ///
+    /// The UI is built in Start, not Awake. Systems_GameLifetimeScope injects
+    /// through a build callback during its own Awake, so a subclass that touched
+    /// an injected model in Awake would be reading a null. By Start every
+    /// Systems_IInjectableView has been constructed.
+    ///
+    /// SAFE AREA. Every screen is inset by Screen.safeArea, converted from pixels
+    /// into the panel's own coordinate space. Without it the game clock rendered
+    /// underneath the punch-hole camera on the first phone it was shown on, and the
+    /// version stamp — which CLAUDE.md specifically requires in the top-left of the
+    /// opening scene — sat behind the same cutout. A 9:16 reference resolution says
+    /// nothing about where a given handset puts its holes.
+    /// </summary>
+    [RequireComponent(typeof(UIDocument))]
+    [DisallowMultipleComponent]
+    public abstract class Systems_ScreenView : MonoBehaviour
+    {
+        /// <summary>
+        /// Resources path of the shared panel. One asset for every screen: portrait
+        /// 1080x1920, scaling on width per CLAUDE.md section 3.
+        /// </summary>
+        private const string PANEL_SETTINGS_RESOURCE = "PoFootballPanelSettings";
+
+        /// <summary>
+        /// Tap sound, from the Kenney UI pack that shipped with this project and had
+        /// never been referenced by anything.
+        ///
+        /// A RECORDING RATHER THAN A SYNTHESISED TICK, and that is not a departure
+        /// from Systems_ToneBank's reasoning. That class synthesises because
+        /// docs/ASSETS.md records that Asset Store audio "cannot be fetched without
+        /// a signed-in human clicking Add to My Assets" — an argument about sounds
+        /// the repository does not have. These six .ogg files were already in it,
+        /// under Assets/_Project/Environments/Art/Kenney/UIPack/Sounds (CC0), unreferenced by any script,
+        /// and now live in Resources/Audio/Ui; the rest of that pack, 400-odd
+        /// sprites nothing ever named, has since been deleted. There
+        /// is no case for synthesising a click when a good one is sitting in the
+        /// project unused.
+        /// </summary>
+        private const string TAP_CLIP_RESOURCE = "Audio/Ui/click-a";
+
+        private UIDocument _document;
+        private VisualElement _safeArea;
+        private bool _isBuilt;
+
+        private AudioSource _uiAudio;
+        private AudioClip _tapClip;
+
+        private Rect _lastSafeArea;
+        private Vector2Int _lastScreenSize;
+
+        /// <summary>
+        /// The safe-area-inset root every screen builds into. Null until Start has
+        /// run. Anything added here is guaranteed to be reachable and visible.
+        /// </summary>
+        protected VisualElement Root { get; private set; }
+
+        /// <summary>
+        /// The document's true root, outside the safe-area inset. Only for chrome
+        /// that genuinely wants to bleed to the physical edge of the display — a
+        /// background wash, a full-bleed scrim. Text does not belong here.
+        /// </summary>
+        protected VisualElement UnsafeRoot { get; private set; }
+
+        /// <summary>Builds the screen's element tree into <see cref="Root"/>.</summary>
+        protected abstract void BuildUi();
+
+        /// <summary>
+        /// Android Back (the Escape key everywhere else): close whatever this screen
+        /// has open on top of itself and return true, or return false to let the
+        /// press fall through to the screen beneath and, last, to the status HUD's
+        /// way out. Systems_StatusHudView asks the screens in panel order, topmost
+        /// first, so the sheet a viewer can see is the one Back closes.
+        /// </summary>
+        internal virtual bool HandleBack()
+        {
+            return false;
+        }
+
+        /// <summary>
+        /// The panel order this screen draws at; the order Back is offered in.
+        /// </summary>
+        internal float SortingOrder => _document == null ? 0f : _document.sortingOrder;
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// A notch and a home indicator for a test to put on the Game view, which
+        /// has neither: pixels taken off the top (x) and bottom (y) of the screen,
+        /// used in place of Screen.safeArea until set back to zero. Editor-only, so
+        /// no build can carry it; Systems_AspectSweepTests is the one writer.
+        /// </summary>
+        internal static Vector2 SimulatedInsetPixels { get; set; }
+#endif
+
+        protected virtual void Awake()
+        {
+            _document = GetComponent<UIDocument>();
+
+            if (_document.panelSettings == null)
+            {
+                PanelSettings settings =
+                    Resources.Load<PanelSettings>(PANEL_SETTINGS_RESOURCE);
+
+                if (settings == null)
+                {
+                    Debug.LogError(
+                        $"{GetType().Name}: no PanelSettings at Resources/"
+                        + $"{PANEL_SETTINGS_RESOURCE}. The screen cannot render. Recreate it "
+                        + "at Assets/_Project/Data/Resources/PoFootballPanelSettings.asset.");
+                    return;
+                }
+
+                _document.panelSettings = settings;
+            }
+        }
+
+        protected virtual void Start()
+        {
+            if (_document == null || _document.panelSettings == null)
+            {
+                return;
+            }
+
+            UnsafeRoot = _document.rootVisualElement;
+
+            if (UnsafeRoot == null)
+            {
+                Debug.LogError($"{GetType().Name}: UIDocument has no root visual element.");
+                return;
+            }
+
+            UnsafeRoot.Clear();
+
+            _safeArea = new VisualElement();
+            _safeArea.name = "SafeArea";
+            _safeArea.style.flexGrow = 1f;
+            UnsafeRoot.Add(_safeArea);
+
+            // NEITHER OF THESE TWO CONTAINERS MAY BE A HIT-TEST TARGET, AND THIS IS
+            // NOT A MICRO-OPTIMISATION — IT IS WHY THE MENU'S PLAY BUTTON WORKS.
+            //
+            // Both default to PickingMode.Position and both fill the entire panel.
+            // A runtime panel consumes a pointer event whenever its hit test picks
+            // ANY element, so a screen whose root is pickable swallows every tap on
+            // the whole display, including the ones aimed at a panel underneath it.
+            //
+            // With one screen per scene that was invisible. It stopped being
+            // invisible the moment Systems_StatusHudView started drawing over the
+            // menu and the HUD at sortingOrder 300: on a device, MENU and DEBUG
+            // worked — they are inside the status HUD — and PLAY, QUIT and every
+            // other control in the game were dead, with no error anywhere, because
+            // the status HUD's empty safe-area root was picking first. Measured on a
+            // Pixel 9 Pro, not reasoned about: three taps on PLAY, no scene load in
+            // logcat.
+            //
+            // Ignore does not affect descendants — the bars, buttons and sheets
+            // inside are picked exactly as before. Systems_UiTheme.Layer() already
+            // does this for the same reason one level down; the containers this
+            // class owns simply never got the same treatment.
+            UnsafeRoot.pickingMode = PickingMode.Ignore;
+            _safeArea.pickingMode = PickingMode.Ignore;
+
+            Root = _safeArea;
+
+            ApplySafeArea();
+            BuildUi();
+            _isBuilt = true;
+
+            BuildUiAudio();
+        }
+
+        /// <summary>
+        /// Gives every pressable thing on every screen a tap sound, in one place.
+        ///
+        /// WHY IT IS HERE AND NOT IN Systems_UiTheme.Button. The theme is a static
+        /// class with no scene presence, so a click handler there would need an
+        /// AudioSource from somewhere — which means either a singleton or a service
+        /// locator, and .claude/rules/architecture.md rules out both. This class is
+        /// already the one thing every screen derives from and it already owns a
+        /// GameObject, so it can own one AudioSource and hear every click through
+        /// the panel's own event system.
+        ///
+        /// TrickleDown, so the callback runs on the way DOWN to the target rather
+        /// than bubbling back up. A Button that calls StopPropagation on its click —
+        /// which the diagnostic overlay's toggle does — would otherwise silence
+        /// itself, and "some buttons click and some do not" is a worse bug than no
+        /// sound at all.
+        ///
+        /// The screen registers on UnsafeRoot rather than Root because the version
+        /// stamp and any full-bleed chrome live outside the safe-area inset, and a
+        /// tap anywhere in the document should sound the same.
+        /// </summary>
+        private void BuildUiAudio()
+        {
+            _tapClip = Resources.Load<AudioClip>(TAP_CLIP_RESOURCE);
+
+            if (_tapClip == null)
+            {
+                // Not an error. A missing click is a silent button, not a broken
+                // screen, and every screen in the game still works without it.
+                return;
+            }
+
+            _uiAudio = gameObject.AddComponent<AudioSource>();
+            _uiAudio.playOnAwake = false;
+            _uiAudio.loop = false;
+
+            // 2D. A menu button is not somewhere on the field, and in SCN_GAME the
+            // listener is a moving broadcast microphone — a positional UI click
+            // would pan around as the ball moved.
+            _uiAudio.spatialBlend = 0f;
+
+            UnsafeRoot.RegisterCallback<ClickEvent>(OnAnyClick, TrickleDown.TrickleDown);
+        }
+
+        private void OnAnyClick(ClickEvent evt)
+        {
+            // Only actual controls, not the empty chrome between them. Without this
+            // test a tap on the scoreboard or on bare field clicks like a button.
+            if (_uiAudio == null || !(evt.target is Button))
+            {
+                return;
+            }
+
+            _uiAudio.PlayOneShot(_tapClip, Systems_AudioSettings.EffectsBus);
+        }
+
+        /// <summary>
+        /// Re-inset when the device rotates, the window resizes, or the simulator
+        /// swaps handset. Cheap: two struct comparisons, and it only writes styles
+        /// when something actually moved.
+        /// </summary>
+        protected virtual void Update()
+        {
+            ApplyBrowserAspect();
+
+            if (_safeArea == null)
+            {
+                return;
+            }
+
+            ApplySafeArea();
+        }
+
+        /// <summary>
+        /// A browser window can be landscape (16:9) as well as portrait (9:16), and
+        /// the WebGL page fills it either way. The panel scales on WIDTH against a
+        /// 1080x1920 reference, which in a landscape window would ask a
+        /// 1920-unit-tall design to fit in ~600 units of height (the reason
+        /// Systems_DisplayBootstrap locks a phone to portrait). In a landscape
+        /// browser window it scales on HEIGHT instead, so the screens keep their
+        /// full 1920 units of height and gain width. WebGL only: a phone build is
+        /// portrait-locked, and in the Editor this would write to the shared asset.
+        /// </summary>
+        private void ApplyBrowserAspect()
+        {
+            if (Application.platform != RuntimePlatform.WebGLPlayer
+                || _document == null
+                || _document.panelSettings == null)
+            {
+                return;
+            }
+
+            float match = UnityEngine.Screen.width > UnityEngine.Screen.height ? 1f : 0f;
+
+            if (!Mathf.Approximately(_document.panelSettings.match, match))
+            {
+                _document.panelSettings.match = match;
+            }
+        }
+
+        private void ApplySafeArea()
+        {
+            Rect safeArea = UnityEngine.Screen.safeArea;
+            Vector2Int screenSize = new Vector2Int(
+                UnityEngine.Screen.width, UnityEngine.Screen.height);
+
+#if UNITY_EDITOR
+            if (SimulatedInsetPixels != Vector2.zero)
+            {
+                safeArea = new Rect(
+                    0f, SimulatedInsetPixels.y, screenSize.x,
+                    screenSize.y - SimulatedInsetPixels.x - SimulatedInsetPixels.y);
+            }
+#endif
+
+            if (safeArea == _lastSafeArea && screenSize == _lastScreenSize)
+            {
+                return;
+            }
+
+            if (screenSize.x <= 0 || screenSize.y <= 0)
+            {
+                return;
+            }
+
+            // The panel scales, so the inset has to be expressed as a fraction of
+            // the screen rather than in pixels — a 100 px notch is not 100 panel
+            // units unless the scale happens to be 1.
+            float panelWidth = UnsafeRoot.resolvedStyle.width;
+            float panelHeight = UnsafeRoot.resolvedStyle.height;
+
+            // Before the first layout pass the resolved size is NaN. Leave the
+            // inset at zero and pick it up next frame rather than writing NaN
+            // padding, which silently collapses the whole tree.
+            //
+            // THE CACHE IS WRITTEN BELOW THIS GUARD, NOT ABOVE IT, AND THAT ONE LINE
+            // OF ORDERING IS THE WHOLE FEATURE. This method is first called from
+            // Start, which is BEFORE the panel has ever laid out, so the resolved
+            // size is reliably NaN on that first call. Recording safeArea and
+            // screenSize before returning meant every later call matched the cache
+            // and returned at the check above — so the padding was applied exactly
+            // never, and the class written to keep the game clock out from under a
+            // punch-hole camera silently did nothing on every device that has one.
+            //
+            // Found on the deployed build, not by reading this file: the diagnostic
+            // sheet reported "safe area 0 top / 0 bottom" on a Pixel 9 Pro whose
+            // Screen.cutouts is non-empty.
+            if (float.IsNaN(panelWidth) || float.IsNaN(panelHeight)
+                || panelWidth <= 0f || panelHeight <= 0f)
+            {
+                return;
+            }
+
+            // Committed only now that the inset is actually about to be written.
+            _lastSafeArea = safeArea;
+            _lastScreenSize = screenSize;
+
+            // A SAFE AREA THAT DOES NOT FIT ON THE SCREEN BELONGS TO ANOTHER SCREEN.
+            //
+            // With the Device Simulator open beside the Game view, the Editor reports
+            // the Game view's size but the SIMULATED device's safe area and cutouts.
+            // Measured: Screen 1080x2520 with a safe area 960 wide and 2566 tall —
+            // taller than the screen it is supposed to be inside. Applied as given,
+            // that inset every screen by 120 px down the right edge, and the status
+            // bar, the scoreboard and the menu all stopped 11% short on a capture
+            // that was otherwise a faithful 20:9 phone. No real device reports a safe
+            // area larger than its own display, so this changes nothing on one; it
+            // only refuses to inset by a rectangle measured on different hardware.
+            if (safeArea.xMax > screenSize.x + 0.5f || safeArea.yMax > screenSize.y + 0.5f
+                || safeArea.xMin < -0.5f || safeArea.yMin < -0.5f)
+            {
+                _safeArea.style.paddingLeft = 0f;
+                _safeArea.style.paddingRight = 0f;
+                _safeArea.style.paddingTop = 0f;
+                _safeArea.style.paddingBottom = 0f;
+                return;
+            }
+
+            float leftPixels = safeArea.xMin;
+            float rightPixels = screenSize.x - safeArea.xMax;
+
+            // Screen space is y-up and UI Toolkit is y-down, so the safe area's
+            // yMin is the distance from the BOTTOM of the display.
+            float bottomPixels = safeArea.yMin;
+            float topPixels = screenSize.y - safeArea.yMax;
+
+            ExpandForCutouts(screenSize, ref topPixels, ref bottomPixels);
+
+            // A safe area is supposed to lie inside the screen. It does not always:
+            // for a frame after a resolution change the two are reported from
+            // different moments, and in the Editor a Device Simulator window left
+            // open beside the Game view answers Screen.safeArea for a 960x2658
+            // foldable while Screen.height says 1920 — which made the top inset
+            // minus 646 pixels. An inset is a distance. Floor it at zero rather
+            // than hand the layout engine a negative padding to interpret.
+            leftPixels = Mathf.Max(0f, leftPixels);
+            rightPixels = Mathf.Max(0f, rightPixels);
+            topPixels = Mathf.Max(0f, topPixels);
+            bottomPixels = Mathf.Max(0f, bottomPixels);
+
+            float left = leftPixels / screenSize.x * panelWidth;
+            float right = rightPixels / screenSize.x * panelWidth;
+            float bottom = bottomPixels / screenSize.y * panelHeight;
+            float top = topPixels / screenSize.y * panelHeight;
+
+            _safeArea.style.paddingLeft = left;
+            _safeArea.style.paddingRight = right;
+            _safeArea.style.paddingTop = top;
+            _safeArea.style.paddingBottom = bottom;
+        }
+
+        /// <summary>
+        /// Grows the top and bottom insets to clear any display cutout.
+        ///
+        /// THIS IS THE PART THAT SAFE AREA ALONE DOES NOT DO. Screen.safeArea
+        /// generally accounts for the status bar and the home indicator, but on a
+        /// great many Android handsets a punch-hole camera is NOT subtracted from
+        /// it — it is reported separately in Screen.cutouts, and safeArea happily
+        /// claims the full display. Insetting by safeArea alone therefore looks
+        /// correct on an iPhone and still renders the game clock underneath the
+        /// camera on a Pixel, which is exactly what this project was doing.
+        ///
+        /// Only cutouts in the top or bottom band are considered. A cutout in the
+        /// middle of the screen is a folding hinge, not something to inset around.
+        /// </summary>
+        private static void ExpandForCutouts(
+            Vector2Int screenSize, ref float topPixels, ref float bottomPixels)
+        {
+            Rect[] cutouts = UnityEngine.Screen.cutouts;
+
+            if (cutouts == null)
+            {
+                return;
+            }
+
+            float middle = screenSize.y * 0.5f;
+
+            for (int index = 0; index < cutouts.Length; index++)
+            {
+                Rect cutout = cutouts[index];
+
+                if (cutout.height <= 0f || cutout.width <= 0f)
+                {
+                    continue;
+                }
+
+                if (cutout.center.y > middle)
+                {
+                    // Top cutout: inset far enough to clear its lowest edge.
+                    topPixels = Mathf.Max(topPixels, screenSize.y - cutout.yMin);
+                }
+                else
+                {
+                    bottomPixels = Mathf.Max(bottomPixels, cutout.yMax);
+                }
+            }
+        }
+
+        /// <summary>
+        /// True once BuildUi has run. Message handlers can fire before Start — the
+        /// container is built in the scope's Awake — so anything that touches an
+        /// element must check this first.
+        /// </summary>
+        protected bool IsBuilt => _isBuilt;
+    }
+}

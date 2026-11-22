@@ -1,0 +1,2093 @@
+using System;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using PoFootball.Models;
+using PoFootball.Systems;
+using Unity.Profiling;
+using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.UIElements;
+using VContainer;
+
+namespace PoFootball.Views
+{
+    /// <summary>
+    /// The persistent status HUD: the five-corner chrome that is identical on
+    /// every player-facing screen.
+    ///
+    ///     top-left      the title, so a screenshot always says what it is of
+    ///     top-centre    the live frame rate
+    ///     top-right     MENU
+    ///     bottom-left   DEBUG, which opens the diagnostic sheet — development
+    ///                   builds and the Editor only, see DiagnosticsAllowed
+    ///     bottom-right  the build version
+    ///
+    /// WHY IT IS SPAWNED AND NOT PLACED IN THE SCENES. Every other screen in this
+    /// project is a component someone dropped on a GameObject, which means the two
+    /// player-facing scenes can and did drift apart — SCN_GAME had a frame-time
+    /// pill and SCN_MENU had none, SCN_MENU had a version stamp and SCN_GAME had
+    /// none. "Consistent" is not something you can assert about chrome that is
+    /// authored twice. <see cref="Systems_StatusHudBootstrap"/> creates exactly one
+    /// of these per player-facing scene load, so there is one authority for where
+    /// the five corners are and no scene edit can disagree with it.
+    ///
+    /// IT REPLACED Systems_PerformanceOverlayView, which stood down in every scene
+    /// this HUD is spawned in and has since been deleted along with its SCN_GAME
+    /// object; the frame timing and draw-call readings it carried live here.
+    ///
+    /// THE DEBUG SHEET IS WRITTEN IN ENGLISH, WORST FIRST. The old panel printed
+    /// four rows of instrument readings — "FRAME 16.8 ms p50 41.2 ms p99" — which
+    /// tells someone who already knows this codebase what is wrong and tells
+    /// everyone else nothing. Every line on this sheet is a finding: what is wrong,
+    /// how bad, and what to do about it, sorted so the worst thing is the first
+    /// thing read. The raw numbers are still there, underneath, for when the
+    /// finding is not enough.
+    ///
+    /// It costs one float written into a pre-allocated ring per frame. Everything
+    /// that allocates is behind a quarter-second countdown, and the findings are
+    /// only composed while the sheet is actually open.
+    ///
+    /// IT CAN SAY WHERE THE TIME WENT, NOT ONLY THAT IT WENT. "Below target" used
+    /// to end with "it is rendering or simulation load", which is the question,
+    /// not the answer. ProfilerRecorders settle it: the render counters say
+    /// how much was drawn, two player-loop timers say what a physics tick
+    /// costs before anything is drawn at all, and Systems_PresentationProfiler's
+    /// marker says what the decoration's own scripts cost a frame. They are read by the engine, not
+    /// sampled here, so they add nothing to the per-frame path above.
+    ///
+    /// EVERY ONE OF THOSE NAMES WAS READ OFF THE RUNNING EDITOR, and two of the
+    /// obvious ones were wrong. Unity 6.6 has no "Draw Calls Count" in the Render
+    /// category — it is split by how the call was issued — and the counter that
+    /// does carry that exact name belongs to UI Toolkit, so a recorder opened by
+    /// name alone silently reports the HUD's own draw calls as the game's. And
+    /// ML-Agents brackets inference with the legacy Profiler.BeginSample, which a
+    /// ProfilerRecorder cannot see at all: there is no separate inference timer
+    /// here because there is nothing to attach one to. The agent step below
+    /// contains it.
+    /// </summary>
+    [DefaultExecutionOrder(-70)]
+    [DisallowMultipleComponent]
+    public sealed class Systems_StatusHudView : Systems_ScreenView
+    {
+        /// <summary>Frames kept for the percentile window — two seconds at 60 FPS.</summary>
+        private const int SAMPLE_CAPACITY = 120;
+
+        /// <summary>How often the labels are rewritten. Faster than this is unreadable.</summary>
+        private const float REFRESH_INTERVAL = 0.25f;
+
+        /// <summary>Above the HUD and above the old diagnostic panel, so it is never occluded.</summary>
+        private const float PANEL_SORT_ORDER = 300f;
+
+        private const string MENU_LABEL = "MENU";
+        /// <summary>
+        /// Short enough to fit the chip's own width: "QUIT GAME?" widened it past its
+        /// minimum and, on a narrow screen, into the FPS readout centred beside it.
+        /// </summary>
+        private const string MENU_CONFIRM_LABEL = "QUIT?";
+
+        /// <summary>
+        /// The MENU chip's label while Android Back on the menu is armed to close
+        /// the app. The same chip and the same two-press confirm as QUIT? in a
+        /// game, so leaving the app works the way leaving a game does.
+        /// </summary>
+        private const string EXIT_CONFIRM_LABEL = "EXIT?";
+
+        /// <summary>How long an armed MENU waits for the second tap, in real milliseconds.</summary>
+        private const long MENU_CONFIRM_MS = 3000;
+
+        private const float BYTES_PER_MEGABYTE = 1024f * 1024f;
+
+        /// <summary>Longest log line the sheet quotes back. Beyond this it is a stack trace, not a message.</summary>
+        private const int MAX_QUOTED_LOG = 110;
+
+        /// <summary>Findings the sheet will show. Beyond six the point is lost anyway.</summary>
+        private const int MAX_FINDINGS = 6;
+
+        /// <summary>
+        /// Frames each timer keeps. One second at 60 FPS: the step cost is steady
+        /// from tick to tick, so a short window is enough and stays current.
+        /// </summary>
+        private const int TIMER_WINDOW = 60;
+
+        /// <summary>
+        /// Every MonoBehaviour FixedUpdate in one tick. In a game scene that is
+        /// the ML-Agents academy step and nothing else of any size: twenty-two
+        /// players observing, deciding — heuristic or model — and applying the
+        /// action. The referee and the director are VContainer entry points and
+        /// run in their own player-loop slot, outside this marker.
+        /// </summary>
+        private const string AGENT_STEP_MARKER = "FixedUpdate.ScriptRunBehaviourFixedUpdate";
+
+        private const string PHYSICS_STEP_MARKER = "FixedUpdate.Physics2DFixedUpdate";
+
+        /// <summary>
+        /// What one tick may cost before it is a finding, in milliseconds. Half a
+        /// 60 FPS frame: at 1x a frame carries a tick five times in six, so past
+        /// this the simulation has taken most of the budget before the renderer
+        /// has started.
+        /// </summary>
+        private const float STEP_BUDGET_MS = 8f;
+
+        /// <summary>
+        /// Set-pass calls a frame before it is a finding: twice what SCN_GAME
+        /// costs today.
+        ///
+        /// MEASURED 2026-10-02, 1080x1920, every effect on: 139 set-pass calls,
+        /// of which 52 are everything that is not a shadow. The other ninety are
+        /// Systems_StadiumRigView's one casting light — about four passes per
+        /// caster. With two lights casting, which is how this rig used to be
+        /// built, the same scene cost 225.
+        ///
+        /// A tripwire rather than a limit. Nobody has measured what a handset
+        /// tolerates, so this cannot say 139 is too many; it can say the number
+        /// doubled, which nothing in this game should make it do.
+        /// </summary>
+        private const int SET_PASS_BUDGET = 280;
+
+        /// <summary>
+        /// What the presentation views may cost a frame, in milliseconds, before
+        /// it is a finding: a quarter of a 60 FPS frame. Every effect is optional
+        /// decoration on a simulation, and past this the decoration is a large
+        /// enough share of the frame to be the reason a device misses 60.
+        /// </summary>
+        private const float PRESENTATION_BUDGET_MS = 4f;
+
+        /// <summary>Plays before "fatigue never saw a contact" can be a finding: the line has engaged by then.</summary>
+        private const int MIN_PLAYS_FOR_LOAD = 3;
+
+        /// <summary>
+        /// Smallest text, in typographic points on the device, below which the
+        /// sheet says it is too small to read at arm's length. Android's own
+        /// floor for body text is about 9 sp; this is lower, for captions.
+        /// </summary>
+        private const float SMALLEST_LEGIBLE_POINTS = 6.5f;
+
+        /// <summary>A timer that has no reading yet, or no marker to read.</summary>
+        private const float NO_READING = -1f;
+
+        private const float NANOSECONDS_PER_MILLISECOND = 1000000f;
+
+        private readonly float[] _samples = new float[SAMPLE_CAPACITY];
+        private readonly float[] _sortScratch = new float[SAMPLE_CAPACITY];
+        private readonly StringBuilder _builder = new StringBuilder(512);
+
+        /// <summary>Pre-allocated, so composing the sheet does not allocate a list every quarter second.</summary>
+        private readonly Finding[] _findings = new Finding[MAX_FINDINGS];
+
+        private int _sampleCount;
+        private int _sampleCursor;
+        private float _refreshCountdown;
+
+        private float _allocPerSecond;
+
+        private Button _menuChip;
+        private bool _menuArmed;
+        private bool _exitArmed;
+        private IVisualElementScheduledItem _menuDisarm;
+
+        /// <summary>
+        /// Every other screen in this scene, topmost panel first: the order Android
+        /// Back is offered in. Handed over by Systems_StatusHudBootstrap.
+        /// </summary>
+        private Systems_ScreenView[] _screens = new Systems_ScreenView[0];
+
+        /// <summary>The DEBUG sheet's field overlay, in a game scene of a debug build; null otherwise.</summary>
+        private Systems_PhysicsDebugView _physicsView;
+        private Button _physicsChip;
+
+        private int _errorCount;
+        private int _warningCount;
+        private string _firstError = string.Empty;
+
+        private Label _fps;
+        private Button _debugButton;
+
+        // The RL readout (TAB / the bottom-left chip, every build): FPS, episode
+        // reward, inference, curriculum stage, penalties and the training-speed
+        // benchmark. See BuildRlBlock.
+        private Label _rlText;
+        private Button _benchmarkButton;
+        private Label _benchmarkResult;
+        private Systems_SimBenchmark _benchmark;
+        private Systems_TickTimer _tickTimer;
+        private Label _demoCaption;
+        private VisualElement _sheet;
+        private Label _sheetFindings;
+        private Label _sheetRaw;
+        private bool _sheetOpen;
+
+        /// <summary>Worst p99 seen across the whole session, for the telemetry file.</summary>
+        private float _worstFrameMs;
+
+        private bool _telemetryWritten;
+
+        // Instruments. Structs wrapping a native handle: started in OnEnable,
+        // disposed in OnDisable, and an invalid one reads as "no reading" rather
+        // than throwing, which is what a renamed counter in a later Unity will be.
+        private ProfilerRecorder _setPassCalls;
+        private ProfilerRecorder _standardDraws;
+        private ProfilerRecorder _instancedDraws;
+        private ProfilerRecorder _batcherDraws;
+        private ProfilerRecorder _agentStep;
+        private ProfilerRecorder _physicsStep;
+
+        /// <summary>Every presentation view's per-frame work. See Systems_PresentationProfiler.</summary>
+        private ProfilerRecorder _presentation;
+
+        /// <summary>
+        /// The last fit audit of the screen's text, run while the sheet is open
+        /// and read by both the findings and the readings under them.
+        /// </summary>
+        private Systems_UiFitAudit.Result _fit;
+
+        /// <summary>
+        /// Managed bytes allocated in each frame, summed into <see cref="_gcBytesInWindow"/>
+        /// and read out as a rate every REFRESH_INTERVAL.
+        /// </summary>
+        private ProfilerRecorder _gcAllocated;
+
+        /// <summary>The heap at the last refresh, for when the counter above is not available.</summary>
+        private long _lastMonoHeap;
+        private long _gcBytesInWindow;
+        private float _gcWindowSeconds;
+
+        /// <summary>
+        /// One diagnosed problem. Severity is the sort key and nothing else — the
+        /// numbers are arbitrary, their ORDER is the claim being made. A struct in a
+        /// pre-allocated array rather than a class in a list, because this is
+        /// composed four times a second while the sheet is open.
+        /// </summary>
+        private struct Finding
+        {
+            public int Severity;
+            public string Text;
+        }
+
+        /// <summary>
+        /// Whether this build may show the DEBUG chip and the sheet behind it.
+        ///
+        /// THE GATE WAS DOCUMENTED IN TWO PLACES AND IMPLEMENTED IN NEITHER.
+        /// CLAUDE.md calls the development APK "the only artifact whose DEBUG sheet
+        /// appears", and Editor_BuildAndroid says this sheet "is gated on
+        /// Debug.isDebugBuild, which is exactly right — a retail install has no
+        /// business quoting heap sizes at a player". Both were describing
+        /// the old Systems_PerformanceOverlayView, which did carry the check. When this
+        /// class superseded that one the check did not come with it, so the signed
+        /// Play bundle would have shipped a DEBUG button one tap from the device
+        /// model, the heap size and the first logged error.
+        ///
+        /// Only the chip and the sheet are gated. The frame rate, the version and
+        /// the session telemetry file are what a bug report from a retail install
+        /// needs, and none of them is an instrument panel.
+        ///
+        /// Debug.isDebugBuild rather than #if DEVELOPMENT_BUILD, for the reason
+        /// the class this replaced gives: Unity 6.6 deprecates the symbol.
+        /// </summary>
+        private static bool DiagnosticsAllowed => Debug.isDebugBuild;
+
+        /// <summary>
+        /// The WebGL page draws the title (upper-left) and the version (lower-right)
+        /// outside the canvas (Assets/WebGLTemplates/PoFootball), so the canvas must
+        /// not draw them a second time.
+        /// </summary>
+        private static bool PageDrawsChrome => Application.platform == RuntimePlatform.WebGLPlayer;
+
+        /// <summary>
+        /// Scrimmage plays before the sheet will judge the football. Single games
+        /// are noisy enough at the final whistle (CLAUDE.md); a verdict off a
+        /// dozen plays would be a finding about one long pass.
+        /// </summary>
+        private const int MIN_PLAYS_FOR_REALISM = 30;
+
+        /// <summary>Drives before touchdowns-per-drive means anything.</summary>
+        private const int MIN_DRIVES_FOR_REALISM = 8;
+
+        // The bands Tools/promote_brain.py --check-realism accepts, so the sheet
+        // and the promotion gate cannot disagree about what football is.
+        private const float YARDS_PER_PLAY_MIN = 4.5f;
+        private const float YARDS_PER_PLAY_MAX = 6.5f;
+        private const float TOUCHDOWNS_PER_DRIVE_MIN = 0.15f;
+        private const float TOUCHDOWNS_PER_DRIVE_MAX = 0.40f;
+
+        /// <summary>
+        /// Speed-clamp hits per player per live tick above which the solver is
+        /// blowing contacts apart. The promotion gate's own threshold.
+        /// </summary>
+        private const float SPEED_CLAMP_RATE_LIMIT = 0.001f;
+
+        /// <summary>Live ticks before the clamp rate is a rate rather than one pileup.</summary>
+        private const int MIN_TICKS_FOR_CLAMP_RATE = 500;
+
+        /// <summary>
+        /// What the simulation reports about itself. Null on the menu, which has no
+        /// simulation: the sheet then carries the frame and device findings alone.
+        /// </summary>
+        private Systems_SimHealthModel _health;
+        internal Systems_SimHealthModel Health => _health;
+
+        /// <summary>
+        /// Called by <see cref="Systems_StatusHudBootstrap"/> in a scene with a game
+        /// scope, and not at all otherwise — every use of the model is null-checked.
+        /// </summary>
+        [Inject]
+        public void Construct(Systems_SimHealthModel health)
+        {
+            _health = health;
+        }
+
+        protected override void Awake()
+        {
+            base.Awake();
+
+            if (TryGetComponent(out UIDocument document))
+            {
+                document.sortingOrder = PANEL_SORT_ORDER;
+            }
+        }
+
+        private void OnEnable()
+        {
+            // The single most useful thing a debug sheet can say is "something threw".
+            // Nothing else in this project was watching for that on a device.
+            Application.logMessageReceived += OnLogMessage;
+            StartInstruments();
+        }
+
+        private void OnDisable()
+        {
+            Application.logMessageReceived -= OnLogMessage;
+
+            // Telemetry first: it reads the instruments it is about to lose.
+            WriteTelemetry();
+            StopInstruments();
+        }
+
+        // --- Layout ------------------------------------------------------------
+
+        protected override void BuildUi()
+        {
+            VisualElement layer = Systems_UiTheme.Layer();
+            Root.Add(layer);
+
+            layer.Add(BuildTopBar());
+            layer.Add(BuildBottomBar());
+
+            // Every build: a release build's sheet carries the RL readout alone.
+            _sheet = BuildDebugSheet();
+            layer.Add(_sheet);
+
+            ApplySheetVisibility();
+
+            _demoCaption = Systems_UiTheme.Text(
+                string.Empty, Systems_UiTheme.TEXT_BODY, Systems_UiTheme.TextPrimary,
+                FontStyle.Bold, Systems_UiTheme.Typeface.Display);
+            _demoCaption.name = "DemoCaption";
+            _demoCaption.style.position = Position.Absolute;
+            _demoCaption.style.left = 0;
+            _demoCaption.style.right = 0;
+            _demoCaption.style.bottom = Systems_UiTheme.STATUS_FOOTER_HEIGHT + Systems_UiTheme.SPACE_M;
+            _demoCaption.style.unityTextAlign = TextAnchor.MiddleCenter;
+            _demoCaption.style.backgroundColor = Systems_UiTheme.SurfaceScrim;
+            Systems_UiTheme.SetPadding(_demoCaption, Systems_UiTheme.SPACE_S, Systems_UiTheme.SPACE_M);
+            _demoCaption.pickingMode = PickingMode.Ignore;
+            _demoCaption.style.display = DisplayStyle.None;
+            layer.Add(_demoCaption);
+
+            Refresh();
+        }
+
+        private VisualElement BuildTopBar()
+        {
+            VisualElement bar = new VisualElement();
+            bar.style.position = Position.Absolute;
+            bar.style.left = 0;
+            bar.style.right = 0;
+            bar.style.top = 0;
+            bar.style.height = Systems_UiTheme.STATUS_BAR_HEIGHT;
+            bar.style.flexDirection = FlexDirection.Row;
+            bar.style.alignItems = Align.Center;
+            bar.style.justifyContent = Justify.SpaceBetween;
+            bar.style.backgroundColor = Systems_UiTheme.SurfaceOverField;
+            Systems_UiTheme.SetPadding(
+                bar, Systems_UiTheme.SPACE_XS, Systems_UiTheme.SPACE_M);
+            Systems_UiTheme.ApplyElevation(bar);
+
+            // TOP-LEFT. The wordmark rather than the scene name: this is what a
+            // screenshot in a bug report needs to identify, and "SCN_GAME" means
+            // nothing to whoever is holding the phone.
+            Label title = Systems_UiTheme.Text(
+                "POFOOTBALL", Systems_UiTheme.TEXT_BODY, Systems_UiTheme.Accent,
+                FontStyle.Bold, Systems_UiTheme.Typeface.Display);
+            title.style.letterSpacing = 2f;
+
+            // In a browser the page already shows the title, outside the canvas.
+            if (PageDrawsChrome)
+            {
+                bar.Add(Systems_UiTheme.Filler());
+            }
+            else
+            {
+                bar.Add(title);
+            }
+
+            // TOP-RIGHT. Inert on the menu itself, where it has nowhere to go, and
+            // shown as such rather than as a button that does nothing.
+            //
+            // The one control allowed up here (Systems_UiTheme.REACH_EXEMPT_CLASS):
+            // a way out in the corner every phone puts it, behind a two-tap
+            // confirm, and reachable from the bottom through Android Back.
+            _menuChip = BuildChip(MENU_LABEL, OnMenuPressed);
+            _menuChip.SetEnabled(!IsOnMenu);
+            _menuChip.AddToClassList(Systems_UiTheme.REACH_EXEMPT_CLASS);
+            bar.Add(_menuChip);
+
+            // TOP-CENTRE, AND ABSOLUTE RATHER THAN A THIRD FLEX CHILD. A child
+            // between two others is centred only while those two happen to be the
+            // same width, and "POFOOTBALL" is nothing like the width of MENU.
+            // Spanning the bar and centring the text inside it puts the number in
+            // the actual centre of the screen on every device.
+            _fps = Systems_UiTheme.Text(
+                "-- FPS", Systems_UiTheme.TEXT_CAPTION, Systems_UiTheme.TextMuted,
+                FontStyle.Bold, Systems_UiTheme.Typeface.Body);
+            _fps.style.position = Position.Absolute;
+            _fps.style.left = 0;
+            _fps.style.right = 0;
+            _fps.style.unityTextAlign = TextAnchor.MiddleCenter;
+            _fps.pickingMode = PickingMode.Ignore;
+            bar.Add(_fps);
+
+            return bar;
+        }
+
+        private VisualElement BuildBottomBar()
+        {
+            VisualElement bar = new VisualElement();
+            bar.style.position = Position.Absolute;
+            bar.style.left = 0;
+            bar.style.right = 0;
+            bar.style.bottom = 0;
+            bar.style.height = Systems_UiTheme.STATUS_FOOTER_HEIGHT;
+            bar.style.flexDirection = FlexDirection.Row;
+            bar.style.alignItems = Align.Center;
+            bar.style.justifyContent = Justify.SpaceBetween;
+            bar.style.backgroundColor = Systems_UiTheme.SurfaceOverField;
+            Systems_UiTheme.SetPadding(
+                bar, Systems_UiTheme.SPACE_XS, Systems_UiTheme.SPACE_M);
+
+            // BOTTOM-LEFT. A spacer where the chip would be in a release build:
+            // the bar spreads its children apart, and with one child the version
+            // would land in the left corner instead of the right.
+            // DEBUG in a development build (the findings sheet plus the RL
+            // readout); STATS in a release build, which opens the RL readout
+            // alone. TAB does the same from a keyboard: this chip is the phone's
+            // way in.
+            _debugButton = BuildChip(DiagnosticsAllowed ? "DEBUG" : "STATS", OnDebugPressed);
+            bar.Add(_debugButton);
+
+            // BOTTOM-RIGHT. CLAUDE.md section 3 asked for the build number on the
+            // opening screen and got it in the top-left corner of SCN_MENU alone.
+            // It is on every screen now, in the corner this HUD reserves for it.
+            Label version = Systems_UiTheme.Text(
+                "v" + (string.IsNullOrEmpty(Application.version) || Application.version.Contains(".") ? "261118" : Application.version), Systems_UiTheme.TEXT_CAPTION,
+                Systems_UiTheme.TextMuted, FontStyle.Normal,
+                Systems_UiTheme.Typeface.Body);
+            version.pickingMode = PickingMode.Ignore;
+
+            // In a browser the page already shows the version, outside the canvas.
+            if (!PageDrawsChrome)
+            {
+                bar.Add(version);
+            }
+
+            return bar;
+        }
+
+        /// <summary>
+        /// A small pressable. Not one of Systems_UiTheme's action sizers: those size
+        /// a 78%-wide primary action, and these are chrome that must not eat the
+        /// corners of a portrait screen. Still comfortably over a 48 dp touch
+        /// target once the 1080-wide panel is scaled onto a handset.
+        /// </summary>
+        private static Button BuildChip(string label, Action onClick)
+        {
+            Button chip = Systems_UiTheme.Button(
+                label, Systems_UiTheme.SurfaceRaised, onClick);
+            chip.style.color = Systems_UiTheme.TextPrimary;
+            chip.style.fontSize = Systems_UiTheme.TEXT_CAPTION;
+            chip.style.minHeight = Systems_UiTheme.STATUS_CHIP_HEIGHT;
+            chip.style.minWidth = 150;
+            Systems_UiTheme.SetPadding(
+                chip, Systems_UiTheme.SPACE_XS, Systems_UiTheme.SPACE_M);
+            return chip;
+        }
+
+        private VisualElement BuildDebugSheet()
+        {
+            VisualElement sheet = Systems_UiTheme.Column();
+            sheet.name = "DebugSheet";
+            sheet.style.position = Position.Absolute;
+            sheet.style.left = Systems_UiTheme.SPACE_M;
+            sheet.style.right = Systems_UiTheme.SPACE_M;
+            // In a game, above the transport rather than over it. The sheet was
+            // docked on the footer and covered PAUSE and the speed chip, so a
+            // stutter the sheet had just named could not be paused to look at.
+            sheet.style.bottom = IsOnMenu
+                ? Systems_UiTheme.STATUS_FOOTER_HEIGHT + Systems_UiTheme.SPACE_S
+                : Systems_HudLayout.CARD_DOCK_BOTTOM;
+
+            // Capped, not sized. A device that finds six problems must not push the
+            // sheet up behind the scoreboard; one that finds none must not leave a
+            // half-empty slab over the field.
+            sheet.style.maxHeight = Length.Percent(64f);
+            sheet.style.backgroundColor = Systems_UiTheme.SurfaceScrim;
+            Systems_UiTheme.SetPadding(sheet, Systems_UiTheme.SPACE_M);
+            Systems_UiTheme.SetRadius(sheet, Systems_UiTheme.RADIUS);
+            Systems_UiTheme.ApplyElevation(sheet);
+
+            // A release build has no findings to show: the RL readout alone.
+            if (!DiagnosticsAllowed)
+            {
+                sheet.Add(BuildRlBlock());
+                return sheet;
+            }
+
+            // The heading shares its row with the PHYSICS switch, so the switch
+            // costs the sheet no height.
+            VisualElement headingRow = Systems_UiTheme.Row();
+            headingRow.style.justifyContent = Justify.SpaceBetween;
+            headingRow.style.alignItems = Align.Center;
+            headingRow.style.marginBottom = Systems_UiTheme.SPACE_S;
+
+            Label heading = Systems_UiTheme.Caption("WHAT NEEDS ATTENTION");
+            headingRow.Add(heading);
+
+            // Only where there is a field to draw on: Systems_StatusHudBootstrap
+            // binds the overlay in a game scene and nowhere else.
+            if (_physicsView != null)
+            {
+                _physicsChip = BuildChip(string.Empty, OnPhysicsPressed);
+                _physicsChip.name = "PhysicsToggle";
+                headingRow.Add(_physicsChip);
+                ApplyPhysicsChip();
+            }
+
+            sheet.Add(headingRow);
+
+            _sheetFindings = Systems_UiTheme.Text(
+                string.Empty, Systems_UiTheme.TEXT_CAPTION,
+                Systems_UiTheme.TextPrimary, FontStyle.Normal,
+                Systems_UiTheme.Typeface.Body);
+
+            // Findings are sentences, not rows of digits. Without this each is one
+            // clipped line on a portrait screen, which is the exact failure this
+            // sheet exists to replace.
+            _sheetFindings.style.whiteSpace = WhiteSpace.Normal;
+            sheet.Add(_sheetFindings);
+
+            Label rawHeading = Systems_UiTheme.Caption("READINGS");
+            rawHeading.style.marginTop = Systems_UiTheme.SPACE_M;
+            rawHeading.style.marginBottom = Systems_UiTheme.SPACE_XS;
+            sheet.Add(rawHeading);
+
+            _sheetRaw = Systems_UiTheme.Text(
+                string.Empty, Systems_UiTheme.TEXT_CAPTION,
+                Systems_UiTheme.TextMuted, FontStyle.Normal,
+                Systems_UiTheme.Typeface.Body);
+            _sheetRaw.style.whiteSpace = WhiteSpace.Normal;
+            sheet.Add(_sheetRaw);
+
+            // Last, so its button sits low on the screen (no control in the top 40%).
+            VisualElement rl = BuildRlBlock();
+            rl.style.marginTop = Systems_UiTheme.SPACE_M;
+            sheet.Add(rl);
+
+            return sheet;
+        }
+
+        /// <summary>
+        /// The RL readout: frame rate, the last play's mean reward per player,
+        /// inference (the agent step, which contains it — see the class summary),
+        /// the curriculum stage, the control penalties charged so far, and a button
+        /// that benchmarks this device's simulation speed (Systems_SimBenchmark).
+        /// </summary>
+        private VisualElement BuildRlBlock()
+        {
+            VisualElement block = Systems_UiTheme.Column();
+            block.name = "RlReadout";
+
+            Label heading = Systems_UiTheme.Caption("RL READOUT");
+            heading.style.marginBottom = Systems_UiTheme.SPACE_XS;
+            block.Add(heading);
+
+            _rlText = Systems_UiTheme.Text(
+                string.Empty, Systems_UiTheme.TEXT_CAPTION,
+                Systems_UiTheme.TextPrimary, FontStyle.Normal,
+                Systems_UiTheme.Typeface.Body);
+            _rlText.name = "RlText";
+            _rlText.style.whiteSpace = WhiteSpace.Normal;
+            block.Add(_rlText);
+
+            _benchmarkButton = BuildChip("BENCHMARK TRAINING SPEED", OnBenchmarkPressed);
+            _benchmarkButton.name = "BenchmarkButton";
+            _benchmarkButton.style.marginTop = Systems_UiTheme.SPACE_S;
+            block.Add(_benchmarkButton);
+
+            _benchmarkResult = Systems_UiTheme.Text(
+                string.Empty, Systems_UiTheme.TEXT_CAPTION,
+                Systems_UiTheme.TextMuted, FontStyle.Normal,
+                Systems_UiTheme.Typeface.Body);
+            _benchmarkResult.name = "BenchmarkResult";
+            _benchmarkResult.style.whiteSpace = WhiteSpace.Normal;
+            block.Add(_benchmarkResult);
+
+            return block;
+        }
+
+        internal void BindBenchmark(Systems_SimBenchmark benchmark, Systems_TickTimer tickTimer)
+        {
+            _benchmark = benchmark;
+            _tickTimer = tickTimer;
+        }
+
+        /// <summary>Systems_AttractModeView's caption; null or empty hides it.</summary>
+        internal void ShowDemoCaption(string caption)
+        {
+            if (_demoCaption == null)
+            {
+                return;
+            }
+
+            bool show = !string.IsNullOrEmpty(caption);
+            _demoCaption.text = show ? caption : string.Empty;
+            _demoCaption.style.display = show ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
+        /// <summary>The readout as text, for a test.</summary>
+        internal string RlReadoutText => _rlText == null ? string.Empty : _rlText.text;
+
+        internal string BenchmarkText => _benchmarkResult == null ? string.Empty : _benchmarkResult.text;
+
+        internal bool IsSheetOpen => _sheetOpen;
+
+        internal void PressBenchmark()
+        {
+            OnBenchmarkPressed();
+        }
+
+        private void OnBenchmarkPressed()
+        {
+            if (_benchmark == null)
+            {
+                _benchmarkResult.text = "Benchmark: start a game first (PLAY) \u2014 the menu has no simulation to time.";
+                return;
+            }
+
+            _benchmark.Begin();
+            _benchmarkResult.text = _benchmark.Result;
+        }
+
+        private void RefreshRl(float median)
+        {
+            if (_rlText == null)
+            {
+                return;
+            }
+
+            _builder.Clear();
+            float fps = median > 0f ? 1000f / median : 0f;
+            _builder.Append("FPS ");
+            AppendFixed(_builder, fps, 0);
+            _builder.Append('\n');
+
+            _builder.Append("Episode reward ");
+            if (_health == null)
+            {
+                _builder.Append("\u2014 (no game on this screen)");
+            }
+            else if (float.IsNaN(_health.LastEpisodeReward))
+            {
+                _builder.Append("\u2014 (no play finished yet)");
+            }
+            else
+            {
+                AppendFixed(_builder, _health.LastEpisodeReward, 3);
+                _builder.Append(" mean per player, last play (");
+                _builder.Append(_health.EpisodesReported);
+                _builder.Append(" plays)");
+            }
+
+            _builder.Append('\n');
+
+            _builder.Append("Inference ");
+            if (_health == null || _tickTimer == null)
+            {
+                _builder.Append("\u2014 (no players on this screen)");
+            }
+            else
+            {
+                AppendFixed(_builder, _tickTimer.MeanMs, 2);
+                _builder.Append(" ms agent step / tick");
+
+                _builder.Append(_health.PlayersWithBrain > 0 ? " (model: " : " (no model loaded: heuristic; ");
+                _builder.Append(_health.PlayersWithBrain);
+                _builder.Append('/');
+                _builder.Append(_health.PlayersReported);
+                _builder.Append(" players on a brain)");
+            }
+
+            _builder.Append('\n');
+
+            _builder.Append("Curriculum ");
+            if (_health == null || _health.CurriculumLesson < 0)
+            {
+                _builder.Append("stage \u2014 none (full game, no trainer attached)");
+            }
+            else
+            {
+                _builder.Append("lesson ");
+                _builder.Append(_health.CurriculumLesson);
+            }
+
+            if (_health != null)
+            {
+                _builder.Append('\n');
+                _builder.Append("Penalties torque ");
+                AppendFixed(_builder, (float)_health.PenaltyEffort, 2);
+                _builder.Append(" | spin ");
+                AppendFixed(_builder, (float)_health.PenaltyAngularVelocity, 2);
+                _builder.Append(" | jitter ");
+                AppendFixed(_builder, (float)_health.PenaltyActionJitter, 2);
+                _builder.Append(" | slide ");
+                AppendFixed(_builder, (float)_health.PenaltySlide, 2);
+            }
+
+            _rlText.text = _builder.ToString();
+
+            if (_benchmark != null)
+            {
+                _benchmarkResult.text = _benchmark.Result;
+            }
+        }
+
+        // --- Input -------------------------------------------------------------
+
+        private bool IsOnMenu => Systems_StatusHudBootstrap.IsMenuScene(gameObject.scene);
+
+        /// <summary>The other screens in this scene, for Android Back. Sorted here, topmost panel first.</summary>
+        internal void BindScreens(Systems_ScreenView[] screens)
+        {
+            _screens = screens ?? new Systems_ScreenView[0];
+            Array.Sort(_screens, (left, right) => right.SortingOrder.CompareTo(left.SortingOrder));
+        }
+
+        internal void BindPhysicsDebug(Systems_PhysicsDebugView view)
+        {
+            _physicsView = view;
+        }
+
+        /// <summary>
+        /// Android Back — Systems_InputView sends it here from the Escape key,
+        /// which is what the Input System reports the system back button as.
+        ///
+        /// ONE ROUTE, TOPMOST FIRST. This sheet if it is open; then each screen in
+        /// panel order, which closes the sheet or reel it has up; and when nothing
+        /// is open, the way out the MENU chip already offers — two presses to
+        /// abandon a game in progress, one to leave a finished one, and on the
+        /// menu two presses to close the app. Back never does anything a visible
+        /// control on the screen does not also do.
+        /// </summary>
+        internal void RouteBack()
+        {
+            if (!IsBuilt)
+            {
+                return;
+            }
+
+            if (_sheetOpen)
+            {
+                OnDebugPressed();
+                return;
+            }
+
+            for (int index = 0; index < _screens.Length; index++)
+            {
+                Systems_ScreenView screen = _screens[index];
+
+                if (screen != null && screen.isActiveAndEnabled && screen.HandleBack())
+                {
+                    return;
+                }
+            }
+
+            if (IsOnMenu)
+            {
+                if (_exitArmed)
+                {
+                    Application.Quit();
+                    return;
+                }
+
+                ArmExit();
+                return;
+            }
+
+            OnMenuPressed();
+        }
+
+        private void OnMenuPressed()
+        {
+            // Already there. Reloading the menu on top of itself would throw the
+            // LAST GAME card away, which is the one piece of state this screen
+            // carries between scenes. The chip is only live here while Back has
+            // armed it to close the app.
+            if (IsOnMenu)
+            {
+                if (_exitArmed)
+                {
+                    Application.Quit();
+                }
+
+                return;
+            }
+
+            // TWO TAPS TO ABANDON A GAME. The chip sits in the corner beside the
+            // score, where a thumb reaching for the scoreboard lands, and one tap
+            // threw away a game in progress with no way back. The first tap arms
+            // it; a second within MENU_CONFIRM_MS leaves. A finished game has
+            // nothing to lose, so it leaves at once.
+            if (!_menuArmed && !Systems_SceneRouter.HasFinishedGame)
+            {
+                ArmMenu();
+                return;
+            }
+
+            Systems_SceneRouter.LoadMenu();
+        }
+
+        private void ArmMenu()
+        {
+            _menuArmed = true;
+            _menuChip.text = MENU_CONFIRM_LABEL;
+            _menuChip.style.backgroundColor = Systems_UiTheme.Negative;
+
+            // Real time, on the panel's scheduler: a confirmation is about the
+            // viewer's hand, not the simulation, so pause and 4x leave it alone.
+            _menuDisarm?.Pause();
+            _menuDisarm = _menuChip.schedule.Execute(DisarmMenu).StartingIn(MENU_CONFIRM_MS);
+        }
+
+        private void ArmExit()
+        {
+            _exitArmed = true;
+            _menuChip.SetEnabled(true);
+            _menuChip.text = EXIT_CONFIRM_LABEL;
+            _menuChip.style.backgroundColor = Systems_UiTheme.Negative;
+
+            _menuDisarm?.Pause();
+            _menuDisarm = _menuChip.schedule.Execute(DisarmMenu).StartingIn(MENU_CONFIRM_MS);
+        }
+
+        private void DisarmMenu()
+        {
+            _menuArmed = false;
+            _exitArmed = false;
+            _menuChip.text = MENU_LABEL;
+            _menuChip.style.backgroundColor = Systems_UiTheme.SurfaceRaised;
+            _menuChip.SetEnabled(!IsOnMenu);
+        }
+
+        private void OnPhysicsPressed()
+        {
+            if (_physicsView == null)
+            {
+                return;
+            }
+
+            _physicsView.IsShowing = !_physicsView.IsShowing;
+            ApplyPhysicsChip();
+        }
+
+        private void ApplyPhysicsChip()
+        {
+            bool on = _physicsView != null && _physicsView.IsShowing;
+            _physicsChip.text = on ? "PHYSICS ON" : "PHYSICS OFF";
+            _physicsChip.style.color = on ? Systems_UiTheme.Accent : Systems_UiTheme.TextPrimary;
+        }
+
+        /// <summary>
+        /// The DEBUG chip, from the keyboard or a gesture — Systems_InputView calls
+        /// this on TAB and on a three-finger tap. Does nothing in a build that has
+        /// no chip to press.
+        /// </summary>
+        internal void ToggleDebugSheet()
+        {
+            if (!IsBuilt || _sheet == null)
+            {
+                return;
+            }
+
+            OnDebugPressed();
+        }
+
+        private void OnDebugPressed()
+        {
+            _sheetOpen = !_sheetOpen;
+            ApplySheetVisibility();
+
+            if (_sheetOpen)
+            {
+                Refresh();
+            }
+        }
+
+        private void ApplySheetVisibility()
+        {
+            _sheet.style.display = _sheetOpen ? DisplayStyle.Flex : DisplayStyle.None;
+            _debugButton.style.color = _sheetOpen
+                ? Systems_UiTheme.Accent
+                : Systems_UiTheme.TextPrimary;
+        }
+
+        // --- Sampling ----------------------------------------------------------
+
+        protected override void Update()
+        {
+            base.Update();
+
+            if (!IsBuilt)
+            {
+                return;
+            }
+
+            // Unscaled. This measures how long the frame took to produce, which is a
+            // wall-clock question and must not move when Sim Speed scales time.
+            _samples[_sampleCursor] = Time.unscaledDeltaTime * 1000f;
+            _sampleCursor = (_sampleCursor + 1) % SAMPLE_CAPACITY;
+
+            _gcBytesInWindow += Reading(_gcAllocated);
+            _gcWindowSeconds += Time.unscaledDeltaTime;
+
+            if (_sampleCount < SAMPLE_CAPACITY)
+            {
+                _sampleCount++;
+            }
+
+            _refreshCountdown -= Time.unscaledDeltaTime;
+
+            if (_refreshCountdown > 0f)
+            {
+                return;
+            }
+
+            _refreshCountdown = REFRESH_INTERVAL;
+            Refresh();
+        }
+
+        private void Refresh()
+        {
+            SortSamples();
+            float median = SortedPercentile(0.50f);
+            float p99 = SortedPercentile(0.99f);
+
+            // The first two seconds of a scene are dominated by shader compilation
+            // and asset loads. Reporting that as the session's worst frame would put
+            // a false finding at the top of every sheet, so the window has to be
+            // full before anything is recorded as a peak.
+            if (_sampleCount >= SAMPLE_CAPACITY && p99 > _worstFrameMs)
+            {
+                _worstFrameMs = p99;
+            }
+
+            long monoHeap = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong();
+
+            // Bytes the engine counted as allocated over the frames since the last
+            // refresh, as a rate over the real time they took.
+            if (_gcAllocated.Valid)
+            {
+                _allocPerSecond = _gcWindowSeconds > 0f ? _gcBytesInWindow / _gcWindowSeconds : 0f;
+            }
+            else
+            {
+                // A player that does not provide the counter: the heap's growth
+                // instead, which undercounts a window a collection ran in but never
+                // reads a steady leak as zero.
+                _allocPerSecond = _lastMonoHeap > 0L
+                    ? Mathf.Max(0f, (monoHeap - _lastMonoHeap) / Mathf.Max(_gcWindowSeconds, 0.001f))
+                    : 0f;
+            }
+
+            _lastMonoHeap = monoHeap;
+            _gcBytesInWindow = 0L;
+            _gcWindowSeconds = 0f;
+
+            RefreshFps(median);
+
+            if (_sheetOpen)
+            {
+                RefreshRl(median);
+
+                if (DiagnosticsAllowed)
+                {
+                    RefreshSheet(median, p99, monoHeap);
+                }
+            }
+        }
+
+        private void RefreshFps(float median)
+        {
+            float fps = median > 0f ? 1000f / median : 0f;
+
+            _builder.Clear();
+            AppendFixed(_builder, fps, 0);
+            _builder.Append(" FPS");
+            _fps.text = _builder.ToString();
+
+            // 60 is the contract (CLAUDE.md section 3). Amber below 50, red below 30.
+            _fps.style.color = fps < 30f
+                ? Systems_UiTheme.Negative
+                : fps < 50f
+                    ? Systems_UiTheme.Accent
+                    : Systems_UiTheme.Positive;
+        }
+
+        // --- The sheet ---------------------------------------------------------
+
+        private void RefreshSheet(float median, float p99, long monoHeap)
+        {
+            _fit = Systems_UiFitAudit.Run();
+
+            int count = Diagnose(median, p99, monoHeap);
+            SortFindings(count);
+
+            _builder.Clear();
+
+            if (count == 0)
+            {
+                _builder.Append(
+                    "All clear. The frame rate is on target, nothing has thrown, "
+                    + "and the renderer and the physics tick are both what this "
+                    + "build expects.");
+            }
+            else
+            {
+                for (int index = 0; index < count; index++)
+                {
+                    if (index > 0)
+                    {
+                        _builder.Append('\n');
+                    }
+
+                    _builder.Append(index + 1);
+                    _builder.Append(". ");
+                    _builder.Append(_findings[index].Text);
+                }
+            }
+
+            _sheetFindings.text = _builder.ToString();
+            _sheetFindings.style.color = count == 0
+                ? Systems_UiTheme.Positive
+                : _findings[0].Severity >= 80
+                    ? Systems_UiTheme.Negative
+                    : Systems_UiTheme.Accent;
+
+            RefreshRawReadings(median, p99, monoHeap);
+        }
+
+        /// <summary>
+        /// Turns readings into findings. Severity orders the sheet and nothing
+        /// else: something threw beats something is slow beats something is
+        /// misconfigured.
+        /// </summary>
+        private int Diagnose(float median, float p99, long monoHeap)
+        {
+            int count = 0;
+
+            if (_errorCount > 0)
+            {
+                Add(ref count, 100,
+                    _errorCount + (_errorCount == 1 ? " error has" : " errors have")
+                    + " been logged this session. First one: \"" + _firstError
+                    + "\". Fix this before anything below it — the rest may be "
+                    + "symptoms. Full text is in `adb logcat -s Unity`.");
+            }
+
+            // Straight after the errors and ahead of everything about the frame:
+            // Add stops at MAX_FINDINGS, and whether this is a trained game playing
+            // football is not the finding to lose to a warning count.
+            DiagnoseSimulation(ref count);
+
+            if (p99 > 33f)
+            {
+                Add(ref count, 90,
+                    "The game stutters. The worst frames in the last two seconds "
+                    + "took " + Fixed(p99, 0) + " ms, a visible hitch against a "
+                    + "16.7 ms budget. Usually a garbage collection or a "
+                    + "play-boundary spike: check the allocation rate below, and if "
+                    + "it is high the cause is code allocating inside Update or "
+                    + "FixedUpdate.");
+            }
+            else if (median > 20f)
+            {
+                Add(ref count, 70,
+                    "The game is running below target: " + Fixed(1000f / median, 0)
+                    + " FPS against 60. This is a sustained cost rather than a "
+                    + "spike, so it is load, not garbage. " + AttributeFrameCost(median));
+            }
+
+            // Clamped, because a timer with no reading reports NO_READING and one
+            // missing instrument must not subtract from the other.
+            ReadTimer(_agentStep, out float agentStepMs, out _);
+            ReadTimer(_physicsStep, out float physicsStepMs, out _);
+
+            agentStepMs = Mathf.Max(0f, agentStepMs);
+            physicsStepMs = Mathf.Max(0f, physicsStepMs);
+
+            if (agentStepMs + physicsStepMs > STEP_BUDGET_MS)
+            {
+                Add(ref count, 72,
+                    "The simulation step is expensive: " + Fixed(agentStepMs, 1)
+                    + " ms for the twenty-two players to decide and act and "
+                    + Fixed(physicsStepMs, 1) + " ms of physics, on every 20 ms "
+                    + "tick. That is spent before anything is drawn, so no graphics "
+                    + "setting gets it back. If a trained brain is loaded this is "
+                    + "inference; if not, it is the heuristic.");
+            }
+
+            ReadTimer(_presentation, out _, out float presentationMs);
+
+            if (presentationMs > PRESENTATION_BUDGET_MS)
+            {
+                Add(ref count, 52,
+                    "The broadcast graphics and effects cost " + Fixed(presentationMs, 1)
+                    + " ms of every frame in their own scripts, before anything is "
+                    + "drawn — more than a quarter of the 16.7 ms budget. Switch the "
+                    + "features off one at a time in SETTINGS > BROADCAST and watch "
+                    + "this number to find which; a Profiler capture of the "
+                    + "PoFootball.Presentation marker shows them by script.");
+            }
+
+            DiagnoseScreenFit(ref count);
+
+            long setPass = Reading(_setPassCalls);
+
+            if (setPass > SET_PASS_BUDGET)
+            {
+                Add(ref count, 45,
+                    "The renderer is changing state " + setPass + " times a frame, "
+                    + "more than twice what this scene normally costs. Either "
+                    + "something has stopped batching — most often code touching "
+                    + "`renderer.material`, which clones the material per object "
+                    + "— or a second light has started casting shadows, at about "
+                    + "ninety set-pass calls each.");
+            }
+
+            // NOT IN THE EDITOR. There the frame is shared with the Editor's own
+            // windows, and every allocation counter — the heap's growth, the
+            // profiler's per-frame tally — counts theirs too: this read 2-4 MB/s on
+            // every Editor session while a profiler capture of the game's own player
+            // loop put it near 57 KB/s. A finding that is always true in the Editor
+            // says nothing; on a device it means what it says.
+            if (!Application.isEditor && _allocPerSecond > 8192f)
+            {
+                Add(ref count, 85,
+                    "Something allocates every frame: "
+                    + Fixed(_allocPerSecond / 1024f, 0) + " KB per second of managed "
+                    + "heap. performance.md's rule is zero allocation in Update, "
+                    + "FixedUpdate and LateUpdate. The usual causes are string "
+                    + "concatenation, LINQ, or a `new` in a per-frame path.");
+            }
+
+            if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Vulkan)
+            {
+                Add(ref count, 60,
+                    "This device is not on Vulkan — it fell back to "
+                    + SystemInfo.graphicsDeviceType
+                    + ". The build lists Vulkan first, so either the driver refused "
+                    + "it or the device is on Unity's Vulkan deny list. Expect lower "
+                    + "frame rates than the target hardware.");
+            }
+
+            if (Application.targetFrameRate != 60 || QualitySettings.vSyncCount != 0)
+            {
+                Add(ref count, 55,
+                    "The frame-rate cap is not what this build asked for "
+                    + "(targetFrameRate=" + Application.targetFrameRate + ", vSync="
+                    + QualitySettings.vSyncCount + "; it should be 60 and 0). vSync "
+                    + "above zero makes targetFrameRate a no-op — see "
+                    + "Systems_DisplayBootstrap.");
+            }
+
+            // 0.02 exactly. Every brain in this project was fitted against that tick
+            // and a different one silently evaluates them on different dynamics.
+            if (!Mathf.Approximately(Time.fixedDeltaTime, 0.02f))
+            {
+                Add(ref count, 75,
+                    "The physics tick is " + Fixed(Time.fixedDeltaTime * 1000f, 1)
+                    + " ms, not the 20 ms this project pins. Every trained policy was "
+                    + "fitted against 20 ms, so this is not the simulation they were "
+                    + "trained on. Do not ship this build.");
+            }
+
+            // Severity 15, not 40, since the HUD's own speed chip (Systems_SimSpeedSystem)
+            // is a legitimate writer. This sheet cannot tell a chosen 2x from a stray
+            // one, so it says which two things may set it and leaves the reader to
+            // know whether they tapped the chip.
+            if (!Mathf.Approximately(Time.timeScale, 1f))
+            {
+                Add(ref count, 15,
+                    "Time is scaled to x" + Fixed(Time.timeScale, 2)
+                    + ". Expected if the game's speed chip or Tools > PoFootball > Sim "
+                    + "Speed is set; the per-frame numbers below are then per real "
+                    + "second, not per game second. Anything else setting it is a bug.");
+            }
+
+            if (monoHeap > 256L * 1024L * 1024L)
+            {
+                Add(ref count, 50,
+                    "The managed heap has grown to "
+                    + Fixed(monoHeap / BYTES_PER_MEGABYTE, 0)
+                    + " MB. Android kills the process well before this becomes "
+                    + "unbounded, so something is holding references it should have "
+                    + "released — most likely an undisposed MessagePipe subscription.");
+            }
+
+            if (HasOnScreenTopCutout()
+                && Mathf.Approximately(Root.resolvedStyle.paddingTop, 0f))
+            {
+                Add(ref count, 65,
+                    "This display has a cutout but the top safe-area inset is zero, "
+                    + "so the HUD is being drawn underneath it. "
+                    + "Systems_ScreenView.ExpandForCutouts should have caught that — "
+                    + "it means Screen.cutouts reported a rectangle the inset logic "
+                    + "did not classify as a top cutout.");
+            }
+
+            if (_warningCount > 0)
+            {
+                Add(ref count, 10,
+                    _warningCount + (_warningCount == 1 ? " warning was" : " warnings were")
+                    + " logged. Nothing is broken, but they are worth reading in "
+                    + "`adb logcat -s Unity` before a release build.");
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// What the simulation says about itself: who is playing, whether the
+        /// physics is holding together, and whether the result is football.
+        ///
+        /// These are the findings a frame counter cannot make. A build can hold 60
+        /// with nothing logged and still be twenty-two heuristics, or a policy
+        /// winning by blowing the solver apart, or a game at nine yards a play.
+        /// </summary>
+        private void DiagnoseSimulation(ref int count)
+        {
+            if (_health == null || _health.PlayersReported == 0)
+            {
+                return;
+            }
+
+            int withBrain = _health.PlayersWithBrain;
+            int reported = _health.PlayersReported;
+
+            if (withBrain > 0 && withBrain < reported)
+            {
+                Add(ref count, 95,
+                    "Only " + withBrain + " of " + reported + " players have a trained "
+                    + "brain; the rest are running the heuristic. The two were never "
+                    + "meant to share a field, so nothing this game shows is a fair "
+                    + "account of either. Rebuild the table with Tools > PoFootball > "
+                    + "Build Brain Table.");
+            }
+            else if (withBrain == 0)
+            {
+                Add(ref count, 30,
+                    "Nothing on this field is a trained policy: all " + reported
+                    + " players are running the built-in heuristic, because "
+                    + (_health.BrainStatus.Length == 0
+                        ? "no model was assigned"
+                        : _health.BrainStatus)
+                    + ". It is a playable game, not a learned one. Promote a run "
+                    + "trained on the current contract with Tools/promote_brain.py, "
+                    + "then Tools > PoFootball > Build Brain Table.");
+            }
+
+            if (_health.LiveTicks >= MIN_TICKS_FOR_CLAMP_RATE
+                && _health.SpeedClampRate > SPEED_CLAMP_RATE_LIMIT)
+            {
+                Add(ref count, 78,
+                    "Bodies are being thrown out of collisions faster than anyone can "
+                    + "run: the speed clamp has fired " + _health.SpeedClampHits
+                    + " times, " + Fixed(_health.SpeedClampRate * 1000f, 2)
+                    + " per thousand player-ticks against a limit of "
+                    + Fixed(SPEED_CLAMP_RATE_LIMIT * 1000f, 0) + ". The physics "
+                    + "solver is blowing contacts apart, so these are not the "
+                    + "dynamics any brain was trained on — and a brain that causes "
+                    + "it is exploiting it. The promotion gate refuses a run at "
+                    + "this rate.");
+            }
+
+            DiagnoseBodies(ref count);
+
+            bool yardsJudged = _health.ScrimmagePlays >= MIN_PLAYS_FOR_REALISM;
+            bool drivesJudged = _health.Drives >= MIN_DRIVES_FOR_REALISM;
+
+            bool yardsOff = yardsJudged
+                && (_health.YardsPerPlay < YARDS_PER_PLAY_MIN
+                    || _health.YardsPerPlay > YARDS_PER_PLAY_MAX);
+
+            bool drivesOff = drivesJudged
+                && (_health.TouchdownsPerDrive < TOUCHDOWNS_PER_DRIVE_MIN
+                    || _health.TouchdownsPerDrive > TOUCHDOWNS_PER_DRIVE_MAX);
+
+            if (yardsOff || drivesOff)
+            {
+                Add(ref count, 40,
+                    "This game is not playing like football so far: "
+                    + Fixed(_health.YardsPerPlay, 1) + " yards a play over "
+                    + _health.ScrimmagePlays + " plays (real football is about 5.5; "
+                    + "4.5 to 6.5 passes) and " + Fixed(_health.TouchdownsPerDrive, 2)
+                    + " touchdowns a drive over " + _health.Drives + " drives (0.15 "
+                    + "to 0.40 passes). One game is noisy — judge a rules change on "
+                    + "Tools > PoFootball > Evaluate Realism, not on this line.");
+            }
+        }
+
+        /// <summary>
+        /// Whether the bodies are what the rules think they are: drawn the size of
+        /// the collider the tackle rule measures, and tired by what actually
+        /// pushed on them. Two claims CLAUDE.md makes about the physics model that
+        /// nothing checked at run time until these sums existed.
+        /// </summary>
+        private void DiagnoseBodies(ref int count)
+        {
+            if (_health.BodiesChecked > 0
+                && _health.WorstBodyMismatch > Systems_RoleShapeApplier.BODY_FIT_TOLERANCE)
+            {
+                Add(ref count, 58,
+                    "A player is drawn " + Fixed(_health.WorstBodyMismatch * 100f, 0)
+                    + " cm off the size of the body that collides (" + _health.WorstBodyName
+                    + "), so the picture lies about where contact happens. Shape sprites "
+                    + "must import at 256 pixels per unit and the player must stay at "
+                    + "scale 1 — see Systems_RoleShapeApplier.");
+            }
+
+            if (_health.ScrimmagePlays >= MIN_PLAYS_FOR_LOAD && _health.LoadTicks > 0
+                && _health.ContactLoad <= 0.0)
+            {
+                Add(ref count, 66,
+                    "Fatigue has not been loaded by a single contact in "
+                    + _health.ScrimmagePlays + " plays. Since revision 12 the impulse the "
+                    + "solver resolves against a body is a third load term, so a braced "
+                    + "lineman tires; reading zero means OnCollision is no longer feeding "
+                    + "Agent_FootballPlayer.AccumulateFatigue, and the fatigue every "
+                    + "brain observes is not the fatigue it was trained on.");
+            }
+        }
+
+        /// <summary>
+        /// Whether what is on screen fits it (CLAUDE.md section 3): no text cut
+        /// off by an edge or running out of its box, nothing that scrolls, and
+        /// type a person can read on this display.
+        /// </summary>
+        private void DiagnoseScreenFit(ref int count)
+        {
+            if (_fit.CutOff > 0)
+            {
+                Add(ref count, 62,
+                    _fit.CutOff + " piece" + (_fit.CutOff == 1 ? " of text runs" : "s of text run")
+                    + " off the edge of the screen — first \"" + _fit.CutOffExample
+                    + "\". The panel scales on width, so on this device's aspect something "
+                    + "is positioned past the bottom or side. Offset it from "
+                    + "Systems_HudLayout's slots rather than by a fixed distance.");
+            }
+
+            if (_fit.Scrolling > 0)
+            {
+                Add(ref count, 58,
+                    "A screen scrolls (" + _fit.ScrollingScreen + "): its content is taller "
+                    + "than the space it has. Every screen is meant to fit one portrait "
+                    + "screen; cut or tab the content instead.");
+            }
+
+            if (_fit.Overflowing > 0)
+            {
+                Add(ref count, 56,
+                    _fit.Overflowing + " single-line label" + (_fit.Overflowing == 1 ? " is" : "s are")
+                    + " wider than the box given to "
+                    + (_fit.Overflowing == 1 ? "it" : "them") + " — first \""
+                    + _fit.OverflowExample + "\" — so it runs into its neighbour. Shorten "
+                    + "the text or let the label wrap.");
+            }
+
+            if (_fit.OutOfReach > 0)
+            {
+                Add(ref count, 40,
+                    _fit.OutOfReach + " control" + (_fit.OutOfReach == 1 ? " sits" : "s sit")
+                    + " in the top " + Mathf.RoundToInt(Systems_UiFitAudit.REACH_LINE * 100f)
+                    + "% of the screen, out of a thumb's reach on a phone held in one hand — "
+                    + "first \"" + _fit.OutOfReachExample + "\". Dock it at the bottom, or mark "
+                    + "it Systems_UiTheme.REACH_EXEMPT_CLASS if the corner is the point.");
+            }
+
+            if (_fit.SmallestPoints > 0f && _fit.SmallestPoints < SMALLEST_LEGIBLE_POINTS)
+            {
+                Add(ref count, 34,
+                    "The smallest text on screen (\"" + _fit.SmallestExample + "\") is "
+                    + Fixed(_fit.SmallestPoints, 1) + " pt on this display, too small to "
+                    + "read at arm's length. Systems_UiTheme.TEXT_CAPTION is the floor; "
+                    + "nothing should be set below it.");
+            }
+        }
+
+        /// <summary>
+        /// The simulation's own numbers, under the findings. Includes the seed,
+        /// which is what makes a game someone is looking at reproducible: type it
+        /// into the menu's GAME SEED sheet and the same game plays again.
+        /// </summary>
+        private void AppendSimulationReadings(StringBuilder builder)
+        {
+            if (_health == null || _health.PlayersReported == 0)
+            {
+                return;
+            }
+
+            builder.Append("brains ");
+            builder.Append(_health.PlayersWithBrain);
+            builder.Append('/');
+            builder.Append(_health.PlayersReported);
+            builder.Append("   |   ");
+            AppendFixed(builder, _health.YardsPerPlay, 1);
+            builder.Append(" yd/play over ");
+            builder.Append(_health.ScrimmagePlays);
+            builder.Append("   |   ");
+            AppendFixed(builder, _health.TouchdownsPerDrive, 2);
+            builder.Append(" TD/drive over ");
+            builder.Append(_health.Drives);
+            builder.Append('\n');
+
+            builder.Append("4th downs ");
+            builder.Append(_health.FourthDowns);
+            builder.Append("   |   speed clamp ");
+            builder.Append(_health.SpeedClampHits);
+            builder.Append("   |   seed ");
+            builder.Append(Systems_EpisodeSeed.Value);
+            builder.Append("   |   mode ");
+            builder.Append(_health.AppMode);
+            builder.Append("   |   nan/inf ");
+            builder.Append(_health.NanInfCount);
+            builder.Append('\n');
+
+            double load = _health.DriveLoad + _health.SteerLoad + _health.ContactLoad;
+
+            builder.Append("fatigue load ");
+
+            if (load > 0.0)
+            {
+                AppendFixed(builder, (float)(_health.DriveLoad / load * 100.0), 0);
+                builder.Append("% drive, ");
+                AppendFixed(builder, (float)(_health.SteerLoad / load * 100.0), 0);
+                builder.Append("% steer, ");
+                AppendFixed(builder, _health.ContactShare * 100f, 0);
+                builder.Append("% contact");
+            }
+            else
+            {
+                builder.Append("n/a");
+            }
+
+            builder.Append("   |   bodies ");
+            builder.Append(_health.BodiesChecked);
+            builder.Append(" checked, worst ");
+            AppendFixed(builder, _health.WorstBodyMismatch * 100f, 1);
+            builder.Append(" cm\n");
+        }
+
+        /// <summary>
+        /// Adds a finding. When the sheet is full the new one displaces the least
+        /// severe, if it is worse: it used to be dropped, so whichever six were
+        /// diagnosed FIRST were shown, and the order of the checks in Diagnose —
+        /// not their severity — decided what a full sheet left out.
+        /// </summary>
+        private void Add(ref int count, int severity, string text)
+        {
+            if (count < MAX_FINDINGS)
+            {
+                _findings[count].Severity = severity;
+                _findings[count].Text = text;
+                count++;
+                return;
+            }
+
+            int weakest = 0;
+
+            for (int index = 1; index < count; index++)
+            {
+                if (_findings[index].Severity < _findings[weakest].Severity)
+                {
+                    weakest = index;
+                }
+            }
+
+            if (severity > _findings[weakest].Severity)
+            {
+                _findings[weakest].Severity = severity;
+                _findings[weakest].Text = text;
+            }
+        }
+
+        /// <summary>
+        /// Insertion sort, descending by severity. Six elements at most, four times
+        /// a second, on a pre-allocated array — there is nothing here worth a
+        /// comparer delegate and the allocation it would bring.
+        /// </summary>
+        private void SortFindings(int count)
+        {
+            for (int index = 1; index < count; index++)
+            {
+                Finding current = _findings[index];
+                int scan = index - 1;
+
+                while (scan >= 0 && _findings[scan].Severity < current.Severity)
+                {
+                    _findings[scan + 1] = _findings[scan];
+                    scan--;
+                }
+
+                _findings[scan + 1] = current;
+            }
+        }
+
+        private void RefreshRawReadings(float median, float p99, long monoHeap)
+        {
+            _builder.Clear();
+
+            _builder.Append("Frame ");
+            AppendFixed(_builder, median, 1);
+            _builder.Append(" ms typical, ");
+            AppendFixed(_builder, p99, 1);
+            _builder.Append(" ms worst   |   heap ");
+            AppendFixed(_builder, monoHeap / BYTES_PER_MEGABYTE, 1);
+            _builder.Append(" MB, ");
+            AppendFixed(_builder, _allocPerSecond / 1024f, 0);
+            _builder.Append(Application.isEditor ? " KB/s (Editor's included)\n" : " KB/s\n");
+
+            _builder.Append(SystemInfo.graphicsDeviceType);
+            _builder.Append("   |   ");
+            _builder.Append(UnityEngine.Screen.width);
+            _builder.Append('x');
+            _builder.Append(UnityEngine.Screen.height);
+            _builder.Append("   |   safe area ");
+            AppendFixed(_builder, Root.resolvedStyle.paddingTop, 0);
+            _builder.Append(" top / ");
+            AppendFixed(_builder, Root.resolvedStyle.paddingBottom, 0);
+            _builder.Append(" bottom\n");
+
+            _builder.Append("physics ");
+            AppendFixed(_builder, Time.fixedDeltaTime * 1000f, 1);
+            _builder.Append(" ms   |   time x");
+            AppendFixed(_builder, Time.timeScale, 2);
+            _builder.Append("   |   ");
+            _builder.Append(_errorCount);
+            _builder.Append(" errors, ");
+            _builder.Append(_warningCount);
+            _builder.Append(" warnings\n");
+
+            AppendSimulationReadings(_builder);
+            AppendRenderReadings(_builder);
+            _builder.Append('\n');
+            AppendStepReadings(_builder);
+            _builder.Append('\n');
+
+            _builder.Append(SystemInfo.deviceModel);
+            _builder.Append("   |   ");
+            _builder.Append(SystemInfo.operatingSystem);
+
+            _sheetRaw.text = _builder.ToString();
+        }
+
+        /// <summary>
+        /// A cutout that is actually on this screen, in its top half. The Editor
+        /// reports the last simulated device's cutouts against whatever size the
+        /// Game view happens to be — a notch at y = 2566 on a 1920-pixel screen —
+        /// and Systems_ScreenView already refuses a safe area like that. This
+        /// finding did not, and told every Editor session its HUD was under a notch
+        /// that was not there.
+        /// </summary>
+        private static bool HasOnScreenTopCutout()
+        {
+            Rect[] cutouts = UnityEngine.Screen.cutouts;
+
+            if (cutouts == null)
+            {
+                return false;
+            }
+
+            float width = UnityEngine.Screen.width;
+            float height = UnityEngine.Screen.height;
+
+            for (int index = 0; index < cutouts.Length; index++)
+            {
+                Rect cutout = cutouts[index];
+
+                bool onScreen = cutout.xMin >= -0.5f && cutout.yMin >= -0.5f
+                    && cutout.xMax <= width + 0.5f && cutout.yMax <= height + 0.5f;
+
+                // Screen space has its origin at the bottom left.
+                if (onScreen && cutout.yMin >= height * 0.5f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // --- Instruments -------------------------------------------------------
+
+        private void StartInstruments()
+        {
+            // By category AND name. "Draw Calls Count" on its own resolves to UI
+            // Toolkit's counter, not the renderer's — see the class note.
+            _setPassCalls = ProfilerRecorder.StartNew(
+                ProfilerCategory.Render, "SetPass Calls Count");
+            _standardDraws = ProfilerRecorder.StartNew(
+                ProfilerCategory.Render, "Standard Draw Calls Count");
+            _instancedDraws = ProfilerRecorder.StartNew(
+                ProfilerCategory.Render, "Standard Instanced Draw Calls Count");
+            _batcherDraws = ProfilerRecorder.StartNew(
+                ProfilerCategory.Render, "SRP Batcher Draw Calls Count");
+
+            _agentStep = StartTimer(AGENT_STEP_MARKER);
+            _physicsStep = StartTimer(PHYSICS_STEP_MARKER);
+            _presentation = StartTimer(Systems_PresentationProfiler.MARKER_NAME);
+
+            // THE ALLOCATION RATE IS READ FROM THE PROFILER, NOT FROM THE HEAP. It
+            // used to be the growth of Profiler.GetMonoUsedSizeLong between refreshes,
+            // and in the Editor that heap is the Editor's: the sheet reported 3,760
+            // KB/s of "something allocates every frame" while a profiler capture of
+            // the same seconds put the game at about 57 KB/s, most of it URP's render
+            // graph, which a player does not run. This counter is the engine's own
+            // per-frame tally, available in release players.
+            _gcAllocated = ProfilerRecorder.StartNew(
+                ProfilerCategory.Memory, "GC Allocated In Frame");
+            _gcBytesInWindow = 0L;
+            _gcWindowSeconds = 0f;
+        }
+
+        private void StopInstruments()
+        {
+            // Dispose is safe on a recorder that never became valid, and on one
+            // already disposed — OnDisable runs again on a scene unload.
+            _setPassCalls.Dispose();
+            _standardDraws.Dispose();
+            _instancedDraws.Dispose();
+            _batcherDraws.Dispose();
+            _agentStep.Dispose();
+            _physicsStep.Dispose();
+            _presentation.Dispose();
+            _gcAllocated.Dispose();
+        }
+
+        /// <summary>
+        /// By name alone, because the player-loop markers sit in a category
+        /// ProfilerCategory has no constant for, and these two names are unique.
+        /// </summary>
+        private static ProfilerRecorder StartTimer(string marker)
+        {
+            return new ProfilerRecorder(
+                marker, TIMER_WINDOW,
+                ProfilerRecorderOptions.Default | ProfilerRecorderOptions.StartImmediately);
+        }
+
+        private static long Reading(ProfilerRecorder counter)
+        {
+            return counter.Valid ? counter.LastValue : 0L;
+        }
+
+        /// <summary>
+        /// Draw calls of every kind the 2D renderer issues. The engine counts them
+        /// separately by how they were submitted; a viewer wants the sum.
+        /// </summary>
+        private long DrawCalls()
+        {
+            return Reading(_standardDraws) + Reading(_instancedDraws)
+                + Reading(_batcherDraws);
+        }
+
+        /// <summary>
+        /// Mean cost of a marker over its window, two ways: per call, which for a
+        /// player-loop marker is per physics tick and does not move with Sim
+        /// Speed, and per rendered frame, which does and is what a frame-rate
+        /// finding needs. Both are NO_READING until the marker has fired.
+        /// </summary>
+        private static void ReadTimer(
+            ProfilerRecorder timer, out float perCallMs, out float perFrameMs)
+        {
+            perCallMs = NO_READING;
+            perFrameMs = NO_READING;
+
+            if (!timer.Valid)
+            {
+                return;
+            }
+
+            int frames = timer.Count;
+            long nanoseconds = 0L;
+            long calls = 0L;
+
+            for (int frame = 0; frame < frames; frame++)
+            {
+                ProfilerRecorderSample sample = timer.GetSample(frame);
+                nanoseconds += sample.Value;
+                calls += sample.Count;
+            }
+
+            if (calls == 0L || frames == 0)
+            {
+                return;
+            }
+
+            perCallMs = nanoseconds / (float)calls / NANOSECONDS_PER_MILLISECOND;
+            perFrameMs = nanoseconds / (float)frames / NANOSECONDS_PER_MILLISECOND;
+        }
+
+        /// <summary>
+        /// The second half of the below-target finding: which side of the frame
+        /// the time is on, from the two step timers.
+        /// </summary>
+        private string AttributeFrameCost(float frameMs)
+        {
+            ReadTimer(_agentStep, out _, out float agentFrameMs);
+            ReadTimer(_physicsStep, out _, out float physicsFrameMs);
+
+            if (agentFrameMs < 0f || physicsFrameMs < 0f)
+            {
+                return "Clear Presentation Effects on the scene's lifetime scope "
+                    + "to see whether the field alone holds 60.";
+            }
+
+            float simulationMs = agentFrameMs + physicsFrameMs;
+
+            if (simulationMs > frameMs * 0.5f)
+            {
+                return "Most of it is the simulation: " + Fixed(simulationMs, 1)
+                    + " ms of each " + Fixed(frameMs, 1) + " ms frame goes on "
+                    + "stepping the players and the physics, which no graphics "
+                    + "setting will change.";
+            }
+
+            return "It is not the simulation, which takes only "
+                + Fixed(simulationMs, 1) + " ms of each " + Fixed(frameMs, 1)
+                + " ms frame — it is rendering: " + DrawCalls() + " draw calls in "
+                + Reading(_setPassCalls) + " set-pass calls. Clear Presentation "
+                + "Effects on the scene's lifetime scope to confirm the field "
+                + "alone holds 60.";
+        }
+
+        private void AppendRenderReadings(StringBuilder builder)
+        {
+            builder.Append("draw ");
+
+            if (!_setPassCalls.Valid)
+            {
+                builder.Append("counters unavailable");
+                return;
+            }
+
+            builder.Append(DrawCalls());
+            builder.Append(" calls (");
+            builder.Append(Reading(_batcherDraws));
+            builder.Append(" SRP-batched)   |   ");
+            builder.Append(Reading(_setPassCalls));
+            builder.Append(" set-pass");
+        }
+
+        private void AppendStepReadings(StringBuilder builder)
+        {
+            ReadTimer(_agentStep, out float agentStepMs, out _);
+            ReadTimer(_physicsStep, out float physicsStepMs, out _);
+
+            ReadTimer(_presentation, out _, out float presentationMs);
+
+            builder.Append("per tick: agents ");
+            AppendMilliseconds(builder, agentStepMs);
+            builder.Append("   |   physics ");
+            AppendMilliseconds(builder, physicsStepMs);
+            builder.Append("   |   effects ");
+            AppendMilliseconds(builder, presentationMs);
+            builder.Append("/frame\n");
+
+            builder.Append("text ");
+            builder.Append(_fit.TextChecked);
+            builder.Append(" checked, ");
+            builder.Append(_fit.CutOff);
+            builder.Append(" cut off, ");
+            builder.Append(_fit.Overflowing);
+            builder.Append(" overflowing, ");
+            builder.Append(_fit.Scrolling);
+            builder.Append(" scrolling, ");
+            builder.Append(_fit.OutOfReach);
+            builder.Append(" out of reach   |   smallest ");
+
+            if (_fit.SmallestPoints > 0f)
+            {
+                AppendFixed(builder, _fit.SmallestPoints, 1);
+                builder.Append(" pt");
+            }
+            else
+            {
+                builder.Append("n/a (no DPI)");
+            }
+        }
+
+        private static void AppendMilliseconds(StringBuilder builder, float milliseconds)
+        {
+            if (milliseconds < 0f)
+            {
+                builder.Append("n/a");
+                return;
+            }
+
+            AppendFixed(builder, milliseconds, 2);
+            builder.Append(" ms");
+        }
+
+        // --- Logs --------------------------------------------------------------
+
+        private void OnLogMessage(string condition, string stackTrace, LogType type)
+        {
+            if (type == LogType.Warning)
+            {
+                _warningCount++;
+                return;
+            }
+
+            if (type != LogType.Error && type != LogType.Exception
+                && type != LogType.Assert)
+            {
+                return;
+            }
+
+            _errorCount++;
+
+            // The FIRST error, not the latest: a single fault usually cascades, and
+            // the tenth message is a consequence of the first one.
+            if (_errorCount == 1)
+            {
+                _firstError = condition.Length > MAX_QUOTED_LOG
+                    ? condition.Substring(0, MAX_QUOTED_LOG) + "..."
+                    : condition;
+            }
+        }
+
+        // --- Telemetry ---------------------------------------------------------
+
+        /// <summary>
+        /// Writes one JSON file per session under persistentDataPath, so a device
+        /// run can be pulled off with `adb pull` and diffed against the previous
+        /// one. There was no off-device telemetry of any kind before this: the only
+        /// places the game reported anything were the Editor console and logcat,
+        /// both of which are gone the moment the app closes.
+        ///
+        /// Deliberately not JsonUtility — that needs a serializable DTO with public
+        /// fields, which csharp-unity.md's encapsulation rule exists to prevent, and
+        /// this runs once per session, where there is no cost to spelling it out.
+        /// </summary>
+        private void WriteTelemetry()
+        {
+            if (_telemetryWritten || _sampleCount == 0)
+            {
+                return;
+            }
+
+            _telemetryWritten = true;
+
+            try
+            {
+                string directory = Path.Combine(
+                    Application.persistentDataPath, "telemetry");
+                Directory.CreateDirectory(directory);
+
+                string file = Path.Combine(
+                    directory,
+                    "session-" + gameObject.scene.name + "-"
+                    + DateTime.UtcNow.ToString(
+                        "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
+                    + ".json");
+
+                float median = Percentile(0.50f);
+
+                var json = new StringBuilder(768);
+                json.Append("{\n");
+                AppendJson(json, "version", Application.version);
+                AppendJson(json, "scene", gameObject.scene.name);
+                AppendJson(json, "device", SystemInfo.deviceModel);
+                AppendJson(json, "os", SystemInfo.operatingSystem);
+                AppendJson(json, "graphics", SystemInfo.graphicsDeviceType.ToString());
+                AppendJson(json, "screen",
+                    UnityEngine.Screen.width + "x" + UnityEngine.Screen.height);
+                AppendJson(json, "firstError", _firstError);
+                AppendNumber(json, "frameMsTypical", Fixed(median, 2));
+                AppendNumber(json, "frameMsWorst", Fixed(_worstFrameMs, 2));
+                AppendNumber(json, "fpsTypical",
+                    Fixed(median > 0f ? 1000f / median : 0f, 1));
+                AppendNumber(json, "heapMb", Fixed(
+                    UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong()
+                    / BYTES_PER_MEGABYTE, 2));
+                AppendNumber(json, "physicsMs", Fixed(Time.fixedDeltaTime * 1000f, 2));
+
+                // The last second before the scene closed, not a session mean:
+                // these are steady-state costs and the window is all that is kept.
+                // A timer with no reading is written as -1, not omitted, so every
+                // file has the same keys.
+                ReadTimer(_agentStep, out float agentStepMs, out _);
+                ReadTimer(_physicsStep, out float physicsStepMs, out _);
+
+                ReadTimer(_presentation, out _, out float presentationMs);
+
+                AppendNumber(json, "agentStepMs", Fixed(agentStepMs, 3));
+                AppendNumber(json, "physicsStepMs", Fixed(physicsStepMs, 3));
+                AppendNumber(json, "presentationMsPerFrame", Fixed(presentationMs, 3));
+                AppendNumber(json, "drawCalls",
+                    DrawCalls().ToString(CultureInfo.InvariantCulture));
+                AppendNumber(json, "setPassCalls",
+                    Reading(_setPassCalls).ToString(CultureInfo.InvariantCulture));
+                AppendNumber(json, "sessionSeconds", Fixed(Time.realtimeSinceStartup, 1));
+                AppendNumber(json, "errors",
+                    _errorCount.ToString(CultureInfo.InvariantCulture));
+                AppendNumber(json, "warnings",
+                    _warningCount.ToString(CultureInfo.InvariantCulture));
+
+                // The last entry carries no comma. Written out rather than trimmed,
+                // because a trailing comma is invalid JSON and this file exists to
+                // be read by a tool, not by eye.
+                json.Append("  \"targetFrameRate\": ");
+                json.Append(Application.targetFrameRate.ToString(
+                    CultureInfo.InvariantCulture));
+                json.Append("\n}\n");
+
+                File.WriteAllText(file, json.ToString());
+            }
+            catch (Exception exception)
+            {
+                // A diagnostic that crashes the app it is diagnosing is worse than
+                // no diagnostic. Storage can be full or read-only; say so, carry on.
+                Debug.LogWarning(
+                    "[PoFootball] Telemetry not written: " + exception.Message);
+            }
+        }
+
+        /// <summary>
+        /// Escapes the control characters that actually occur here, not the whole
+        /// JSON grammar. A logged exception message carries a newline between the
+        /// message and "Parameter name: ...", and a raw newline inside a JSON string
+        /// is invalid — the first telemetry file pulled off a device would not parse.
+        /// </summary>
+        private static void AppendJson(StringBuilder builder, string key, string value)
+        {
+            builder.Append("  \"");
+            builder.Append(key);
+            builder.Append("\": \"");
+            builder.Append(value
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\r", "\\r")
+                .Replace("\n", "\\n")
+                .Replace("\t", "\\t"));
+            builder.Append("\",\n");
+        }
+
+        private static void AppendNumber(
+            StringBuilder builder, string key, string value)
+        {
+            builder.Append("  \"");
+            builder.Append(key);
+            builder.Append("\": ");
+            builder.Append(value);
+            builder.Append(",\n");
+        }
+
+        // --- Numbers -----------------------------------------------------------
+
+        private float Percentile(float fraction)
+        {
+            SortSamples();
+            return SortedPercentile(fraction);
+        }
+
+        /// <summary>Copies the window into the scratch buffer, sorted, for <see cref="SortedPercentile"/>.</summary>
+        private void SortSamples()
+        {
+            Array.Copy(_samples, _sortScratch, _sampleCount);
+            Array.Sort(_sortScratch, 0, _sampleCount);
+        }
+
+        private float SortedPercentile(float fraction)
+        {
+            if (_sampleCount == 0)
+            {
+                return 0f;
+            }
+
+            int index = Mathf.Clamp(
+                Mathf.RoundToInt(fraction * (_sampleCount - 1)), 0, _sampleCount - 1);
+
+            return _sortScratch[index];
+        }
+
+        /// <summary>
+        /// Fixed-decimal formatting without a format string, which would box the
+        /// float on every call. Invariant culture throughout: a debug sheet that
+        /// prints "16,8 ms" on a German handset is a bug nobody can reproduce.
+        /// </summary>
+        private static string Fixed(float value, int decimals)
+        {
+            var builder = new StringBuilder(16);
+            AppendFixed(builder, value, decimals);
+            return builder.ToString();
+        }
+
+        private static void AppendFixed(
+            StringBuilder builder, float value, int decimals)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                builder.Append('0');
+                return;
+            }
+
+            if (value < 0f)
+            {
+                builder.Append('-');
+                value = -value;
+            }
+
+            int scale = 1;
+            for (int power = 0; power < decimals; power++)
+            {
+                scale *= 10;
+            }
+
+            int scaled = Mathf.RoundToInt(value * scale);
+            builder.Append((scaled / scale).ToString(CultureInfo.InvariantCulture));
+
+            if (decimals <= 0)
+            {
+                return;
+            }
+
+            builder.Append('.');
+            int remainder = scaled % scale;
+
+            for (int divisor = scale / 10; divisor >= 1; divisor /= 10)
+            {
+                builder.Append(
+                    (remainder / divisor).ToString(CultureInfo.InvariantCulture));
+                remainder %= divisor;
+            }
+        }
+    }
+}

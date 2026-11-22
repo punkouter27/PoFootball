@@ -29,5 +29,5 @@ def test_unity_version_is_pinned() -> None:
 
 
 def test_training_configs_exist() -> None:
-    configs = sorted((ROOT / "Config").glob("FootballBase*.yaml"))
-    assert configs, "Expected FootballBase*.yaml under Config/"
+    configs = sorted((ROOT / "Training").glob("FootballBase*.yaml"))
+    assert configs, "Expected FootballBase*.yaml under Training/"

@@ -1,0 +1,3896 @@
+using PoFootball.Models;
+using PoFootball.Rewards;
+using PoFootball.Sensors;
+using PoFootball.Systems;
+using Unity.MLAgents;
+using Unity.MLAgents.Actuators;
+using Unity.MLAgents.Policies;
+using Unity.MLAgents.Sensors;
+using UnityEngine;
+using VContainer;
+
+namespace PoFootball.Agents
+{
+    /// <summary>
+    /// One player. Every player in the game is this component — role, brain,
+    /// team id and body dynamics are all derived from a single serialized formation
+    /// slot index, so the scene carries one number per player instead of five
+    /// fields that can disagree with each other.
+    ///
+    /// There are no per-position subclasses. The three brain groups differ only by
+    /// which policy they are bound to and which action space they carry, both of
+    /// which are data. If a position ever needs genuinely different code, that is
+    /// the point to introduce one.
+    ///
+    /// Not constructed by VContainer — Unity instantiates it from the scene, and
+    /// Systems_GameLifetimeScope injects it through a build callback.
+    /// </summary>
+    [RequireComponent(typeof(Rigidbody2D))]
+    [RequireComponent(typeof(BehaviorParameters))]
+    [RequireComponent(typeof(DecisionRequester))]
+    [DisallowMultipleComponent]
+    public sealed class Agent_FootballPlayer
+        : Agent, Systems_IPlayerHandle, Systems_ITrainingHandle
+    {
+        /// <summary>
+        /// Physics tick the heuristic quarterback releases on. Late enough that the
+        /// routes have separated, comfortably inside
+        /// Systems_SimConstants.THROW_WINDOW_TICKS. Twenty ticks after the call
+        /// latches, as it was when the latch was at 40: a fixed 60 would release
+        /// on the latch tick itself once DROPBACK_TICKS passed it (revision 18).
+        /// </summary>
+        private const int THROW_AT_TICK = Systems_SimConstants.DROPBACK_TICKS + 20;
+
+        /// <summary>
+        /// Drive command at or beyond which a tick counts as saturated in the
+        /// Control/DriveSaturation series. ML-Agents hands over clamp(x, -3, 3) / 3,
+        /// so this is a policy whose mean has reached the rail, not noise.
+        /// </summary>
+        private const float DRIVE_SATURATION_THRESHOLD = 0.95f;
+
+        [Tooltip("Index into Systems_Formation. Determines role, brain, team and start position.")]
+        [SerializeField] private int _formationSlotIndex;
+
+        private Transform _transform;
+        private Rigidbody2D _rigidbody;
+        private SpriteRenderer _spriteRenderer;
+        private Color _teamColor = Color.white;
+
+        // Role and side are read on nearly every physics tick by the reward
+        // geometry below, and resolving them means indexing the formation table and
+        // switching on the result. Cached once rather than recomputed 22 times per
+        // tick per agent (.claude/rules/performance.md).
+        private Systems_PlayerRole _role;
+        private Systems_TeamSide _side;
+
+        private float _driveForce;
+        private float _steerTorque;
+        private float _fatigue;
+
+        /// <summary>
+        /// Who this body is this play (revision 14), and the top speed that makes
+        /// it. Set by ApplyTraits with the two derived forces above and the mass,
+        /// so the four can never disagree.
+        /// </summary>
+        private Systems_PlayerTraits _traits;
+        private float _topSpeed;
+
+        /// <summary>
+        /// Normal impulse resolved against this body since AccumulateFatigue last
+        /// ran, in newton-seconds. Written by the collision callbacks, which fire
+        /// after the solver step, and spent on the following tick.
+        /// </summary>
+        private float _contactImpulse;
+
+        // --- CONTROL-EFFORT TELEMETRY (flushed in EndEpisodeNow) ---------------
+        //
+        // Nothing in this simulation measured how hard a policy was working to get
+        // the yards it got. The reward has no actuator-cost term, fatigue is a
+        // physics penalty rather than a recorded quantity, and Play/NetYards is
+        // identical for a back who runs a clean line and one who saws the wheel
+        // back and forth at 50 Hz to hold the same line. Both are worth telling
+        // apart: the second is the signature of a policy exploiting the integrator
+        // rather than learning to run.
+        //
+        // Load is read from APPLIED FORCE, never from the action vector, for
+        // exactly the reason AccumulateFatigue is (CLAUDE.md section 2) — a player
+        // braced against a block is a near-zero action at near-maximum force.
+        //
+        // Running sums of dimensionless per-tick quantities, divided once at the
+        // whistle. Six adds and a compare per tick, zero allocation
+        // (.claude/rules/performance.md).
+        private float _effortSum;
+        private float _steerJerkSum;
+        private float _speedSum;
+        private float _previousSteerCommand;
+        private int _effortTicks;
+
+        /// <summary>
+        /// Mean change in the velocity COMMAND from one decision to the next
+        /// (revision 17). SteerJerk now measures the controller's output, which is
+        /// smooth by construction; this is what the policy itself asked for, and
+        /// chatter there is the thing worth seeing.
+        /// </summary>
+        private float _commandJerkSum;
+        private int _commandDecisions;
+        private Vector2 _previousCommand;
+        private int _speedClampHits;
+
+        // Mean size of the drive command and how often it sits at the rail, PER
+        // ROLE. Control/Effort above cannot tell a lineman leaning on a block from
+        // a receiver who never opens the throttle: it started football_base12 at
+        // 0.525, which is exactly what the sampling noise alone produces, and ended
+        // seven million steps later at 0.65 with SpeedUtilization at 0.15. Whether
+        // that is twenty-two players not running or ten linemen held up is a
+        // question only a per-role series can answer.
+        private float _driveCommandSum;
+        private int _driveSaturatedTicks;
+        private string _driveStatKey;
+        private string _driveSaturationStatKey;
+
+        // --- REWARD LEDGER (flushed in EndEpisodeNow, beside the effort KPIs) ---
+        //
+        // What each term actually PAID this play, per brain. The trainer reports
+        // one cumulative reward, which is zero-sum across the two sides and says
+        // nothing about which term earned it — so a shaping term that grew to
+        // outweigh the result it shapes (the defense paid 5M steps for standing
+        // off in base22) was invisible until a replay. Reward/<brain>/ShapingShare
+        // is the role term's share of everything paid, the number
+        // Tools/watch_hacks.py warns on. Keys built once in Awake.
+        private float _progressRewardSum;
+        private float _roleRewardSum;
+        private float _callRewardSum;
+        private float _terminalRewardSum;
+        private string _ledgerProgressKey;
+        private string _ledgerRoleKey;
+        private string _ledgerCallKey;
+        private string _ledgerTerminalKey;
+        private string _ledgerShapingShareKey;
+        private string _ledgerPenaltyKey;
+
+        // The control penalties (Reward_Penalty): weights from the
+        // PoFootballRewardPenalties asset, a per-play sum for the ledger, and
+        // lifetime totals per term that the tests read.
+        private Reward_Penalty.Weights _penaltyWeights = Reward_Penalty.Weights.Defaults;
+        private float _penaltyRewardSum;
+        private float _penaltyEffortTotal;
+        private float _penaltySpinTotal;
+        private float _penaltyJitterTotal;
+        private float _penaltySlideTotal;
+        private bool _isCarrier;
+        private float _previousBallY;
+        private float _previousBallDistance;
+
+        /// <summary>
+        /// Last tick's Reward_Role.InterceptPotential, defenders only. Re-seeded
+        /// with the other two baselines and moved every tick whether or not the
+        /// term was paid, so nothing earned across a pass's flight or a change of
+        /// possession is paid on the far side of it.
+        /// </summary>
+        private float _previousInterceptPotential;
+        private int _lastSeenEpisode = -1;
+
+        // The TAB overlay's episode reward: the cumulative reward when this play
+        // began, and the last play reported (Systems_SimHealthModel).
+        private float _rewardAtPlayStart;
+        private int _rewardReportedEpisode = -1;
+        /// <summary>
+        /// Index of the play-call branch in the quarterback's discrete action space.
+        /// Branch 1 is the throw trigger; see Agent_ActionContract.For.
+        /// </summary>
+        private const int PLAY_CALL_BRANCH = 0;
+
+        /// <summary>The other branch: hold the ball, or release it.</summary>
+        private const int THROW_BRANCH = 1;
+
+        /// <summary>Index on the throw branch that means "release".</summary>
+        private const int THROW_RELEASE = 1;
+
+        /// <summary>
+        /// Every other brain's one discrete branch: pitch the ball (revision 14).
+        /// Index 1 on it means "pitch now".
+        /// </summary>
+        private const int LATERAL_BRANCH = 0;
+
+        private const int LATERAL_PITCH = 1;
+
+        // --- Heuristic play-call thresholds ----------------------------------
+        //
+        // These shape ChooseCall only. They are NOT part of the action contract and
+        // no promoted brain is fitted against them — a trained quarterback learns
+        // its own thresholds from the down-and-distance observations. They exist so
+        // that the heuristic, which is what runs whenever no brain matches the
+        // current contract revision, exercises the whole playbook.
+
+
+        /// <summary>
+        /// Ticks of jitter either side of the scripted release. Small — it varies
+        /// how a play unfolds without moving the throw outside the window
+        /// OnActionReceived enforces.
+        /// </summary>
+        private const int THROW_RELEASE_JITTER_TICKS = 6;
+
+        /// <summary>
+        /// Fraction of the best receiver's SQUARED separation a receiver must have
+        /// to count as a live read. See PickFromReads.
+        /// </summary>
+        private const float ACCEPTABLE_READ_SHARE = 0.5f;
+
+        /// <summary>
+        /// Longest lead a pursuing defender will solve for, in seconds. See
+        /// InterceptOf — it bounds the intercept point when the carrier is faster.
+        /// </summary>
+        private const float MAX_PURSUIT_LEAD_SECONDS = 1.5f;
+
+        /// <summary>
+        /// Metres from a ZONE spot at which a defender starts easing off the throttle
+        /// rather than driving at it flat out.
+        ///
+        /// A zone is a place to STAND, and Steer had no notion of arriving anywhere —
+        /// it drove at whatever TargetPoint returned under full force regardless of
+        /// how close it already was. For a target that runs away from you that is
+        /// correct and you want to hit it at speed. For a fixed point it means the
+        /// body overshoots, turns around, overshoots the other way, and oscillates
+        /// about the spot it is supposed to be sitting on.
+        ///
+        /// THIS IS WHY RAISING LINEBACKER AND SAFETY TOP SPEEDS MADE THE GAME WORSE.
+        /// That change is recorded in Systems_RoleTable: 8.0 -> 8.5 and 8.7 -> 9.2
+        /// doubled the plays that ended TimeExpired, because a faster body aimed at
+        /// a fixed point overshoots it harder. The speeds were the wrong lever; this
+        /// is the thing that was actually broken.
+        /// </summary>
+        private const float ZONE_SETTLE_RADIUS = 3.5f;
+
+        private bool _hasQuarterbackActions;
+
+        /// <summary>
+        /// The body's facing when this decision's observations were written: the
+        /// frame its velocity command is in, held for the ticks it is repeated.
+        /// </summary>
+        private Vector2 _commandFrameUp = Vector2.up;
+
+        /// <summary>The live command in world m/s, for presentation; zero outside a live play.</summary>
+        private Vector2 _commandedVelocity;
+
+        /// <summary>A decision arrived and its first tick has not been applied yet.</summary>
+        private bool _isFreshCommand;
+
+        /// <summary>
+        /// Whether this is the one defender whose call branch is read. The other
+        /// ten carry the branch because they share the brain, pinned to "no call".
+        /// </summary>
+        private bool _isDefenseCaptain;
+
+        /// <summary>
+        /// The defensive coordinator, which the middle linebacker's player creates
+        /// and nobody else has. Null on every other player. Revision 16.
+        /// </summary>
+        internal Agent_DefensiveCoordinator Coordinator { get; private set; }
+        private bool _isBlocker;
+
+        /// <summary>
+        /// Fullback or halfback — the two roles that line up in the quarterback's
+        /// retreat lane and have to vacate it on a dropback.
+        /// </summary>
+        private bool _isBack;
+        private bool _isReceiver;
+
+        /// <summary>Reused every tick so building observations allocates nothing.</summary>
+        private readonly float[] _observationBuffer =
+            new float[Sensor_FootballState.OBSERVATION_SIZE];
+
+        // Rolling play-call history behind the repetition penalty. Quarterback
+        // only; every other agent allocates two small arrays it never touches,
+        // which is cheaper than branching on role to avoid it.
+        /// <summary>
+        /// Metres of arrival damping for the CURRENT target, or 0 for a target that
+        /// should be driven at flat out. Set by TargetPoint each decision, read by
+        /// Steer. A field rather than a parameter because TargetPoint already
+        /// returns the one value Steer takes and the branch that knows which kind of
+        /// target it is are several frames deep in DefensiveTarget.
+        /// </summary>
+        private float _settleRadius;
+
+        /// <summary>The scripted quarterback's call for this snap; see PlannedCall.</summary>
+        private Systems_PlayCall _plannedCall;
+
+        /// <summary>The play <see cref="_plannedCall"/> was drawn for.</summary>
+        private int _plannedCallEpisode = -1;
+
+        /// <summary>
+        /// Where the quarterback reports what it was choosing between, for the
+        /// broadcast's call sheet. The no-op binding in training.
+        /// </summary>
+        private Systems_ICallSheetSink _callSheet;
+
+        /// <summary>The play the call sheet was last reported for.</summary>
+        private int _callSheetEpisode = -1;
+
+        private readonly float[] _callChances = new float[Systems_CallSheet.CALL_SLOTS];
+
+        /// <summary>The play-call mask, rewritten every decision; see WriteDiscreteActionMask.</summary>
+        private readonly bool[] _callMask = new bool[Agent_ActionLegality.CALL_BRANCH_SIZE];
+
+        private readonly int[] _callCounts =
+            new int[Sensor_FootballState.PLAY_CALL_BRANCH_SIZE];
+
+        private readonly Systems_PlayCall[] _callWindow =
+            new Systems_PlayCall[Systems_SimConstants.CALL_HISTORY_PLAYS];
+
+        private int _callWindowCursor;
+        private int _callWindowFilled;
+
+        private Systems_PlayModel _play;
+        private Systems_BallModel _ball;
+        private Systems_BallSystem _ballSystem;
+        private Systems_FieldModel _field;
+        private Systems_PlayerRegistry _registry;
+        private Systems_Referee _referee;
+
+        /// <summary>
+        /// The officials, told about every collision with an opponent. Null-checked
+        /// for the reason <see cref="_intentSink"/> is.
+        /// </summary>
+        private Systems_PenaltySystem _penalties;
+
+        /// <summary>
+        /// Systems_BallModel.PossessionEpoch as of the last dense-reward tick. When it
+        /// moves the ball has changed sides, been kicked or come loose, and the
+        /// yardage baseline is reset rather than paid across the gap.
+        /// </summary>
+        private int _lastPossessionEpoch = -1;
+
+        /// <summary>
+        /// Training or Game. Read once, in Awake, for exactly one decision — see
+        /// <see cref="ConfigureTrainerLink"/>. Defaults to Training, so an agent
+        /// dropped into a scene with no lifetime scope behaves as it always has.
+        /// </summary>
+        private Systems_SimMode _simMode = Systems_SimMode.Training;
+
+        /// <summary>
+        /// Where the action vector is reported for the intent overlay to draw.
+        /// Never null once Construct has run — the scope binds
+        /// Systems_NullIntentSink when nothing is watching — but it stays
+        /// null-checked because an agent dropped into a scene with no lifetime
+        /// scope gets no Construct at all, which is a case Awake already supports.
+        /// </summary>
+        private Systems_IIntentSink _intentSink;
+
+        /// <summary>
+        /// Where a collision the referee does not rule on is reported, for
+        /// presentation. Null-checked for the reason <see cref="_intentSink"/> is.
+        /// </summary>
+        private Systems_IContactSink _contactSink;
+
+        /// <summary>
+        /// Where this player says whether it got a brain and when the speed clamp
+        /// fires, for the DEBUG sheet. Null-checked for the reason
+        /// <see cref="_intentSink"/> is.
+        /// </summary>
+        private Systems_SimHealthModel _health;
+
+        public int Id => _formationSlotIndex;
+
+        public Systems_PlayerRole Role => _role;
+
+        public Systems_TeamSide Side => _side;
+
+        public Vector2 Position => _rigidbody == null ? Vector2.zero : _rigidbody.position;
+
+        public Vector2 Velocity => _rigidbody == null ? Vector2.zero : _rigidbody.linearVelocity;
+
+        public Vector2 Facing => _transform == null ? Vector2.up : (Vector2)_transform.up;
+
+        public float Fatigue => _fatigue;
+
+        public bool IsCarrier => _isCarrier;
+
+        /// <summary>See Systems_IPlayerHandle.CommandedVelocity. Written each live tick in OnActionReceived.</summary>
+        public Vector2 CommandedVelocity => _commandedVelocity;
+
+        private Systems_FormationSelection _formations;
+
+        /// <summary>
+        /// The QB challenge's human (Systems_HumanControlModel): asked every
+        /// decision whether he is steering this player. Disabled in every other
+        /// game, and null for an agent with no lifetime scope.
+        /// </summary>
+        private Systems_HumanControlModel _humanControl;
+
+        // --- A designed play's route (Systems_PlayDesign, QB challenge) --------
+        //
+        // Where this player lined up at the snap, and whether he has finished the
+        // first leg of his route. Per play; see Systems_RouteBook.
+        private int _routeEpisode = -1;
+        private Vector2 _routeStart;
+        private bool _routeLegComplete;
+
+        /// <summary>
+        /// How much farther than HANDOFF_RADIUS a back may be when the human clicks
+        /// him for the handoff to count: the designated back then closes the rest,
+        /// as on any handoff (TargetPoint's mesh branch).
+        /// </summary>
+        private const float HUMAN_HANDOFF_REACH_METRES = 1f;
+
+        /// <summary>
+        /// Flight ticks before a scripted defender breaks for where the human's pass
+        /// to a spot comes down (0.3 s, a defensive back's read of the throw).
+        /// Until then he chases its line, as on any other pass.
+        /// </summary>
+        private const int DEFENDER_READ_TICKS = 15;
+
+        /// <summary>Null for an agent with no lifetime scope, who is role-average.</summary>
+        private Systems_Roster _roster;
+
+        /// <summary>
+        /// The formations on the field this play, with a fallback for an agent that
+        /// never got a Construct.
+        ///
+        /// CacheRole is documented as idempotent precisely because an agent dropped
+        /// into a scene with no lifetime scope has to keep working, and the two
+        /// places that read alignment — a linebacker's zone anchor and a cover
+        /// defender's assignment — are on the per-decision path where a null
+        /// reference would be a hard crash rather than a degraded heuristic. A
+        /// lazily created selection answers with the base I-formation against a 4-3,
+        /// which is exactly what those two call sites read before formations
+        /// existed.
+        /// </summary>
+        private Systems_FormationSelection Formations =>
+            _formations ??= new Systems_FormationSelection();
+
+        /// <summary>
+        /// Called by Systems_GameLifetimeScope's build callback, which runs from the
+        /// scope's Awake at execution order -5000 — before this component's Awake.
+        /// Nothing here may touch cached Unity references.
+        /// </summary>
+        [Inject]
+        public void Construct(
+            Systems_PlayModel play,
+            Systems_BallModel ball,
+            Systems_BallSystem ballSystem,
+            Systems_FieldModel field,
+            Systems_PlayerRegistry registry,
+            Systems_Referee referee,
+            Systems_SimMode simMode,
+            Systems_IIntentSink intentSink,
+            Systems_IContactSink contactSink,
+            Systems_FormationSelection formations,
+            Systems_Roster roster,
+            Systems_SimHealthModel health,
+            Systems_PenaltySystem penalties,
+            Systems_ICallSheetSink callSheet,
+            Systems_HumanControlModel humanControl)
+        {
+            _humanControl = humanControl;
+            _callSheet = callSheet;
+            _health = health;
+            _roster = roster;
+            _penalties = penalties;
+            _play = play;
+            _ball = ball;
+            _ballSystem = ballSystem;
+            _field = field;
+            _registry = registry;
+            _referee = referee;
+            _simMode = simMode;
+            _intentSink = intentSink;
+            _contactSink = contactSink;
+            _formations = formations;
+
+            // Before Register, not after: the registry hands this instance to the
+            // rest of the graph, and Role and Side are cached fields now rather
+            // than live lookups. A reader between here and Awake would otherwise
+            // see the enum's default value, which is a real role (Quarterback) and
+            // so fails silently rather than loudly.
+            CacheRole();
+            registry.Register(_formationSlotIndex, this);
+        }
+
+        /// <summary>
+        /// Idempotent. Called from Construct and again from Awake, because an agent
+        /// dropped into a scene with no lifetime scope never gets a Construct.
+        /// </summary>
+        private void CacheRole()
+        {
+            _role = Systems_Formation.RoleFor(_formationSlotIndex);
+            _side = Systems_RoleTable.SideOf(_role);
+        }
+
+        protected override void Awake()
+        {
+            // Configure the brain BEFORE Agent.Awake rather than after.
+            //
+            // Every one of the 22 BehaviorParameters in the scene serializes the
+            // component default — zero continuous actions and one discrete branch
+            // of size one — and this component replaces that at runtime from the
+            // formation slot. Doing it before the base call means the actuator
+            // manager, the policy and the BrainParameters sent over the wire to
+            // Python are all built from one spec, instead of relying on the exact
+            // point in Agent's initialisation at which each of them reads it.
+            //
+            // Ordering was NOT the cause of the `ArgumentException: length` flood
+            // seen while bringing football_base04 up. That came from running this
+            // scene with no trainer attached: all 22 agents had BehaviorType
+            // Default with a stale Football_v01 .onnx assigned, so ML-Agents fell
+            // back to inference against a 25-observation, 2-continuous-action brain
+            // and the shapes could not line up. With a trainer connected the policy
+            // is remote and the assigned model is ignored, which is why training
+            // ran clean either way.
+            //
+            // That flood cannot recur: ConfigureBrain below now assigns the model
+            // from Agent_BrainRegistry unconditionally, overwriting whatever the
+            // scene serialized, and Football_v01 has been deleted outright.
+            CacheRole();
+            _hasQuarterbackActions =
+                Systems_RoleTable.HasQuarterbackActions(Systems_RoleTable.BrainOf(_role));
+            _isDefenseCaptain =
+                _formationSlotIndex == Systems_FormationBook.DEFENSIVE_CAPTAIN_SLOT_INDEX;
+
+            // Before base.Awake, which is where Agent registers the communicator.
+            ConfigureTrainerLink();
+            ConfigureBrain();
+
+            // Agent.Awake registers the RPC communicator. Hiding it instead of
+            // overriding leaves that registration to the Academy alone, which
+            // happens to work but is not what ML-Agents intends.
+            base.Awake();
+
+            _transform = transform;
+            _rigidbody = GetComponent<Rigidbody2D>();
+
+            _driveStatKey = "Control/Drive/" + _role;
+            _driveSaturationStatKey = "Control/DriveSaturation/" + _role;
+
+            // Per BRAIN, not per role: every environment stat reaches every
+            // behavior's event file, so the brain has to be in the key.
+            string ledgerPrefix = "Reward/"
+                + Systems_RoleTable.BehaviorNameOf(Systems_RoleTable.BrainOf(_role)) + "/";
+            _ledgerProgressKey = ledgerPrefix + "Progress";
+            _ledgerRoleKey = ledgerPrefix + "Role";
+            _ledgerCallKey = ledgerPrefix + "Call";
+            _ledgerTerminalKey = ledgerPrefix + "Terminal";
+            _ledgerShapingShareKey = ledgerPrefix + "ShapingShare";
+            _ledgerPenaltyKey = ledgerPrefix + "Penalty";
+
+            Reward_PenaltyWeights penaltyAsset =
+                Resources.Load<Reward_PenaltyWeights>(Reward_PenaltyWeights.RESOURCE_PATH);
+            _penaltyWeights = penaltyAsset != null
+                ? penaltyAsset.ToWeights()
+                : Reward_Penalty.Weights.Defaults;
+            _isBlocker = Reward_Role.IsBlocker(_role);
+            _isReceiver = Reward_Role.IsReceiver(_role);
+            _isBack = _role == Systems_PlayerRole.Fullback
+                || _role == Systems_PlayerRole.RunningBack;
+
+            // Team tint is authored in the scene; cache it so the carrier
+            // highlight can be reverted to exactly what it was.
+            _spriteRenderer = GetComponent<SpriteRenderer>();
+            if (_spriteRenderer != null)
+            {
+                _teamColor = _spriteRenderer.color;
+            }
+
+            // Field geometry is pure configuration with no mutable state, so a
+            // local instance is equivalent to the injected singleton. Having one
+            // guarantees CollectObservations always emits a full vector, even if
+            // this agent was dropped into a scene with no lifetime scope.
+            if (_field == null)
+            {
+                _field = new Systems_FieldModel();
+            }
+
+            ConfigureBody();
+        }
+
+        /// <summary>
+        /// The middle linebacker's player builds the defensive coordinator — once,
+        /// after every Awake and every injection, so the Academy is already set up
+        /// for this mode and the play model is in hand. Revision 16.
+        /// </summary>
+        private void Start()
+        {
+            if (_isDefenseCaptain && Coordinator == null && _play != null)
+            {
+                Coordinator = Agent_DefensiveCoordinator.Create(
+                    transform, _play, Formations, _callSheet);
+            }
+        }
+
+        /// <summary>
+        /// Dynamics are set from code rather than serialized in the scene. A scene
+        /// edit that quietly changed mass or damping would mean every existing
+        /// .onnx is evaluated against different dynamics than it was fitted
+        /// against (CLAUDE.md section 2).
+        /// </summary>
+        private void ConfigureBody()
+        {
+            // Top-down view: the field is the XY plane, so there is no gravity to
+            // fall under. CLAUDE.md's -9.81 applies to side-on articulated bodies.
+            _rigidbody.gravityScale = 0f;
+
+            // Mass is per role now. It was a flat 100 kg for everyone through
+            // base03, which meant a 92 kg corner and a 140 kg guard carried
+            // identical momentum into a collision and the pileup was decided
+            // purely by who happened to be moving faster.
+            //
+            // And per player since revision 14. Role-average here; the director's
+            // first ResetTo applies this player's own traits before any snap.
+            ApplyTraits(default);
+            _rigidbody.linearDamping = Systems_RoleTable.LinearDampingOf(_role);
+            _rigidbody.angularDamping = Systems_SimConstants.ANGULAR_DAMPING;
+            _rigidbody.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+            _rigidbody.interpolation = RigidbodyInterpolation2D.None;
+            _rigidbody.sleepMode = RigidbodySleepMode2D.NeverSleep;
+
+            // The scene ships these bodies with FreezeRotation set. Steering is
+            // applied as torque, so leaving that constraint on would silently
+            // discard half of every action the policy takes.
+            _rigidbody.constraints = RigidbodyConstraints2D.None;
+        }
+
+        /// <summary>
+        /// Mass, top speed and the two forces derived from them, for one athlete.
+        /// The only writer of any of the four.
+        /// </summary>
+        private void ApplyTraits(Systems_PlayerTraits traits)
+        {
+            _traits = traits;
+            _topSpeed = Systems_RoleTable.TopSpeedOf(_role, traits);
+            _driveForce = Systems_RoleTable.DriveForceOf(_role, traits);
+            _steerTorque = Systems_RoleTable.SteerTorqueOf(_role, traits);
+            _rigidbody.mass = Systems_RoleTable.MassOf(_role, traits);
+        }
+
+        /// <summary>
+        /// Decides whether ML-Agents may go looking for a trainer at all.
+        ///
+        /// WHY: the Academy opens a gRPC connection to port 5004 the first time any
+        /// Agent initialises, and when nothing is listening it blocks until the
+        /// connect times out. Measured on this project that is about 4.3 seconds —
+        /// 4.3 seconds of frozen, empty field after a player taps PLAY, on every
+        /// single launch of a shipped game that has no trainer and never will. The
+        /// only trace of it is an informational log about performing inference
+        /// instead, which reads as routine.
+        ///
+        /// Set from the scene's own mode rather than probed, and set in BOTH
+        /// directions rather than only switched off. A one-way switch would survive
+        /// "Enter Play Mode without domain reload" and silently prevent the next
+        /// training run in the same editor session from ever reaching mlagents-learn
+        /// — a far worse bug than the one being fixed. Writing it every time makes
+        /// the last scene loaded authoritative.
+        ///
+        /// Must run before base.Awake: the flag has no effect once the Academy has
+        /// initialised, and Agent.Awake is what initialises it.
+        /// </summary>
+        private void ConfigureTrainerLink()
+        {
+            CommunicatorFactory.Enabled = _simMode != Systems_SimMode.Game;
+        }
+
+        private void ConfigureBrain()
+        {
+            Systems_BrainGroup group = Systems_RoleTable.BrainOf(_role);
+
+            BehaviorParameters behaviorParameters = GetComponent<BehaviorParameters>();
+            behaviorParameters.BehaviorName = Systems_RoleTable.BehaviorNameOf(group);
+            behaviorParameters.TeamId = (int)_side;
+            behaviorParameters.BrainParameters.VectorObservationSize =
+                Sensor_FootballState.OBSERVATION_SIZE;
+            behaviorParameters.BrainParameters.NumStackedVectorObservations = 1;
+
+            // Only the quarterback's brain carries the play call, the throw trigger
+            // and the aim vector. Every other brain is two continuous outputs, so
+            // no policy spends capacity learning to ignore dimensions it can never
+            // use — which is what the four backs and receivers sharing the
+            // quarterback's action space were doing through base03.
+            //
+            // Branch 0 is PLAY_CALL_BRANCH_SIZE wide, not PLAY_CALL_SLOTS: index 0
+            // is "no call yet" and maps to Systems_PlayCall.None.
+            //
+            // Built by Agent_ActionContract rather than inline, so the promotion
+            // gate and the contract tests read the shape from the same place the
+            // scene does.
+            behaviorParameters.BrainParameters.ActionSpec = Agent_ActionContract.For(group);
+
+            // The model is assigned here for the same reason the name and the
+            // action spec are: so that nothing in a scene file can contradict the
+            // contract. It used to be the one field left to hand-wiring, and the
+            // result was a quarterback bound to a two-continuous-action brain
+            // throwing ArgumentException out of ActuatorManager on every tick.
+            //
+            // A null model is a valid, supported outcome — ML-Agents runs
+            // Heuristic instead, which is a playable game. See Agent_BrainTable.
+            behaviorParameters.Model = Agent_BrainRegistry.ModelFor(group);
+
+            if (_health != null)
+            {
+                _health.ReportBrain(
+                    behaviorParameters.Model != null, Agent_BrainRegistry.RefusalReason());
+            }
+
+            // The rays, for the same reason as everything above: the scene used to
+            // author them and the promotion gate used to read them back out of the
+            // scene file. See Sensor_RayContract. Called from Awake, so before the
+            // Agent builds its sensors in OnEnable — RaysPerDirection is fixed then.
+            RayPerceptionSensorComponent2D[] rays =
+                GetComponentsInChildren<RayPerceptionSensorComponent2D>(true);
+
+            for (int rayIndex = 0; rayIndex < rays.Length; rayIndex++)
+            {
+                Sensor_RayContract.Apply(rays[rayIndex]);
+            }
+
+            // On its own layer, so the rays and the collision matrix can name the
+            // players rather than "everything". Set here rather than trusted from
+            // the scene for the same reason as the rays.
+            int playerLayer = LayerMask.NameToLayer(Sensor_RayContract.PLAYER_LAYER);
+
+            if (playerLayer >= 0)
+            {
+                gameObject.layer = playerLayer;
+            }
+
+            DecisionRequester decisionRequester = GetComponent<DecisionRequester>();
+            decisionRequester.DecisionPeriod = Systems_SimConstants.DECISION_PERIOD;
+            decisionRequester.TakeActionsBetweenDecisions = true;
+        }
+
+        /// <summary>
+        /// Deliberately empty. Systems_EpisodeDirector repositions all 22 players
+        /// together after ending every episode, so 22 independent OnEpisodeBegin
+        /// calls cannot half-reset the formation in an arbitrary order.
+        /// </summary>
+        public override void OnEpisodeBegin()
+        {
+        }
+
+        public override void CollectObservations(VectorSensor sensor)
+        {
+            // The frame the velocity command of this decision is read in: the
+            // body's, as the observations below are written (revision 17).
+            _commandFrameUp = Facing;
+            _isFreshCommand = true;
+
+            Vector2 position = Position;
+            bool hasPlay = _play != null;
+            bool hasBall = _ball != null;
+
+            Sensor_FootballState.Write(
+                _observationBuffer,
+                _field,
+                _role,
+                _traits,
+                position,
+                Velocity,
+                _rigidbody == null ? 0f : _rigidbody.rotation,
+                _rigidbody == null ? 0f : _rigidbody.angularVelocity,
+                _fatigue,
+                _isCarrier,
+                hasBall ? _ball.Position : position,
+                hasBall ? _ball.Velocity : Vector2.zero,
+                hasBall ? _ball.State : Systems_BallState.Held,
+                hasPlay ? _play.Call : Systems_PlayCall.None,
+                hasPlay ? _play.LineOfScrimmageY : 0f,
+                hasPlay ? _play.Down : 1,
+                hasPlay ? _play.YardsToGo : Systems_GameRules.YARDS_TO_GAIN,
+                hasPlay ? _play.PhysicsTick : 0,
+                hasBall && _ball.IsKicked ? _ball.Height : 0f,
+                PossessionRelativeToMe(),
+                hasPlay ? _play.Kind : Systems_PlayKind.Scrimmage,
+                hasPlay && _play.Phase == Systems_PlayPhase.PreSnap);
+
+            for (int i = 0; i < _observationBuffer.Length; i++)
+            {
+                if (!float.IsFinite(_observationBuffer[i]))
+                {
+                    _observationBuffer[i] = 0f;
+                    _health?.CountNanInf();
+                }
+            }
+
+            sensor.AddObservation(_observationBuffer);
+        }
+
+        /// <summary>Appends zero-initialized trailing observation inputs without reordering existing indices.</summary>
+        public static void AppendZeroInitObservations(VectorSensor sensor, float[] baseObs, int zeroTailCount)
+        {
+            if (baseObs != null)
+            {
+                sensor.AddObservation(baseObs);
+            }
+
+            for (int i = 0; i < zeroTailCount; i++)
+            {
+                sensor.AddObservation(0f);
+            }
+        }
+
+        /// <summary>
+        /// +1 when my side has the ball in its hands, -1 when the other side does, 0
+        /// when it is in the air or on the ground.
+        /// </summary>
+        private float PossessionRelativeToMe()
+        {
+            if (_ball == null || !_ball.IsHeld)
+            {
+                return 0f;
+            }
+
+            return _ball.PossessingSide == _side ? 1f : -1f;
+        }
+
+        /// <summary>
+        /// Makes the kicking calls illegal everywhere they would be absurd, which is
+        /// how the quarterback learns WHEN to use them rather than only that they
+        /// exist.
+        ///
+        /// Masking rather than reward shaping, for two reasons. A punt on first down
+        /// is not a bad decision to be discouraged, it is not a decision at all, and
+        /// a policy should never spend exploration on it. And a field goal from
+        /// eighty yards is not a choice with a poor expected value — it cannot
+        /// happen, so letting the network propose it only teaches it to associate the
+        /// action with a penalty it would never have collected on a real field.
+        ///
+        /// Only the quarterback has this branch; every other brain is continuous-only
+        /// and never reaches here.
+        ///
+        /// REVISION 10 MASKS EVERY DECISION THAT CANNOT MATTER, NOT ONLY THE KICKS.
+        ///
+        /// The call branch is read on exactly one decision per play — the one whose
+        /// actions reach DROPBACK_TICKS — and ignored on every other. Leaving it free
+        /// everywhere meant ~119 of a play's 120 call samples were noise that PPO
+        /// still credited with the play's advantage. Outside the latch window it is
+        /// now pinned to None, so those samples have probability 1 and carry no
+        /// gradient; inside it None is masked, so the call cannot be deferred past
+        /// the dropback by choosing "nothing yet". None stays the decode of a zeroed
+        /// buffer either way — a mask changes what is sampled, not what is stored.
+        ///
+        /// The throw trigger is enabled only when HandleQuarterback would honour it,
+        /// through the same predicate (CanReleasePass), so a policy no longer spends
+        /// exploration on throws that are silently refused.
+        /// </summary>
+        public override void WriteDiscreteActionMask(IDiscreteActionMask actionMask)
+        {
+            if (_play == null)
+            {
+                return;
+            }
+
+            if (!_hasQuarterbackActions)
+            {
+                // Revision 14: everybody but the quarterback can pitch, and only
+                // while carrying with somebody to pitch to.
+                actionMask.SetActionEnabled(LATERAL_BRANCH, LATERAL_PITCH, CanLateral());
+
+                return;
+            }
+
+            // Revision 17: the one authority both this mask and the handlers read,
+            // where Agent_ActionLegalityTests can hold them to each other.
+            Agent_ActionLegality.WriteCallMask(_play, _callMask);
+
+            for (int callIndex = 0; callIndex < _callMask.Length; callIndex++)
+            {
+                actionMask.SetActionEnabled(PLAY_CALL_BRANCH, callIndex, _callMask[callIndex]);
+            }
+
+            actionMask.SetActionEnabled(
+                THROW_BRANCH, THROW_RELEASE, CanReleasePass() || CanLateral());
+        }
+
+        /// <summary>See <see cref="Agent_ActionLegality.CanLateral"/>.</summary>
+        private bool CanLateral()
+        {
+            return Agent_ActionLegality.CanLateral(_play, _ball, _ballSystem, this);
+        }
+
+        /// <summary>See <see cref="Agent_ActionLegality.CanReleasePass"/>.</summary>
+        private bool CanReleasePass()
+        {
+            return Agent_ActionLegality.CanReleasePass(_play, _ball, this);
+        }
+
+        private bool IsInFieldGoalRange()
+        {
+            return Agent_ActionLegality.IsInFieldGoalRange(_play);
+        }
+
+        public override void OnActionReceived(ActionBuffers actions)
+        {
+            if (_play == null)
+            {
+                return;
+            }
+
+            _commandedVelocity = Vector2.zero;
+
+            // BEFORE THE SNAP NOTHING MOVES (revision 14) — the bodies are set, and
+            // the only decision anybody can make is the quarterback's kick-or-go. The
+            // front is the coordinator's (Agent_DefensiveCoordinator).
+            // See Systems_SimConstants.PRESNAP_TICKS for why the bodies are frozen
+            // rather than driven.
+            if (_play.Phase == Systems_PlayPhase.PreSnap)
+            {
+                if (_hasQuarterbackActions)
+                {
+                    HandlePreSnapCall(actions);
+                    ReportCallSheet();
+                }
+
+
+                return;
+            }
+
+            if (_play.Phase != Systems_PlayPhase.Live)
+            {
+                return;
+            }
+
+            ActionSegment<float> continuous = actions.ContinuousActions;
+
+            float cx = continuous[0];
+            float cy = continuous[1];
+            if (!float.IsFinite(cx)) { cx = 0f; _health?.CountNanInf(); }
+            if (!float.IsFinite(cy)) { cy = 0f; _health?.CountNanInf(); }
+
+            // REVISION 17: A VELOCITY, NOT A THROTTLE AND A TORQUE. Forward and
+            // leftward in the frame the observations were written in, resolved into
+            // the same drive and torque as ever. See Agent_VelocityController.
+            Vector2 command = new Vector2(
+                Mathf.Clamp(cx, -1f, 1f), Mathf.Clamp(cy, -1f, 1f));
+
+            Agent_VelocityController.Resolve(
+                command, _commandFrameUp, Facing, Velocity, _topSpeed,
+                out float drive, out float steer);
+
+            // Read before AccumulateCommandJerk moves the baseline: the action
+            // jitter penalty is charged once per decision, on its first tick.
+            float commandStep = _isFreshCommand ? (command - _previousCommand).magnitude : 0f;
+
+            AccumulateCommandJerk(command);
+            _commandedVelocity = CommandInWorld(command);
+
+            float fatigueScale = 1f - (_fatigue * Systems_SimConstants.FATIGUE_MAX_PENALTY);
+            float driveForce = drive * _driveForce * fatigueScale;
+            float steerTorque = steer * _steerTorque * fatigueScale;
+
+            _rigidbody.AddForce(_transform.up * driveForce);
+            _rigidbody.AddTorque(steerTorque);
+
+            if (_hasQuarterbackActions)
+            {
+                HandleQuarterback(actions);
+            }
+            else
+            {
+                HandlePitch(actions);
+            }
+
+            ReportIntent(actions, drive, steer);
+
+            AccumulateFatigue(driveForce, steerTorque);
+            AccumulateControlEffort(driveForce, steerTorque, steer, drive);
+            ChargeControlPenalties(driveForce, steerTorque, commandStep);
+            ClampSpeed();
+            AwardDenseRewards();
+        }
+
+        /// <summary>
+        /// Hands the action vector to presentation, unchanged.
+        ///
+        /// AFTER HandleQuarterback, NOT BEFORE, so an overlay drawn from this sees
+        /// the same latched play call the rest of the frame will. The values
+        /// reported are the CLAMPED drive and steer that were actually applied to
+        /// the rigidbody rather than the raw buffer, because an arrow drawn from a
+        /// policy's unclamped 3.4 would be three times longer than the force it
+        /// produced.
+        ///
+        /// The throw flag is the policy's REQUEST, not the throw. Since revision 10
+        /// the mask (CanReleasePass) stops a trained brain asking for an illegal
+        /// one at decision time, so a lit flag that produced no throw now means the
+        /// situation changed between decisions — the ball came loose or the
+        /// quarterback crossed the line on a repeated action — which is still worth
+        /// being able to see. Under Heuristic the mask does not apply at all.
+        ///
+        /// Costs one struct copy per player per decision. The array store behind
+        /// the interface is the whole implementation in a game and an empty method
+        /// in training (Systems_NullIntentSink).
+        /// </summary>
+        private void ReportIntent(ActionBuffers actions, float drive, float steer)
+        {
+            if (_intentSink == null)
+            {
+                return;
+            }
+
+            Vector2 aim = Vector2.zero;
+            bool throwArmed = false;
+
+            if (_hasQuarterbackActions)
+            {
+                ActionSegment<float> continuous = actions.ContinuousActions;
+                aim = new Vector2(continuous[2], continuous[3]);
+                throwArmed = actions.DiscreteActions[THROW_BRANCH] == THROW_RELEASE;
+            }
+
+            _intentSink.Write(
+                _formationSlotIndex,
+                new Systems_PlayerIntent(
+                    drive,
+                    steer,
+                    _transform.up,
+                    aim,
+                    _hasQuarterbackActions,
+                    throwArmed,
+                    _play.PhysicsTick));
+        }
+
+        /// <summary>
+        /// What the quarterback is choosing between this snap, for the broadcast's
+        /// call sheet: once a play, after the kick window has closed so a kick is
+        /// already off the table, and only on a snap with a live call.
+        ///
+        /// The scripted quarterback's chances are Agent_PlayCaller's own, worked
+        /// out exactly from the same inputs ChooseCall hands it — including
+        /// IsDeepShotPlay, so a deep-shot snap shows the deep pass. A trained
+        /// quarterback's are not sampled: its observation is the full 50-float
+        /// state plus two ray sensors, which a second worker would have to rebuild
+        /// by hand, so the sheet shows its call once it latches and says so.
+        /// </summary>
+        private void ReportCallSheet()
+        {
+            if (_callSheet == null
+                || !_callSheet.Available
+                || _callSheetEpisode == _play.EpisodeIndex
+                || _play.PreSnapTick < Systems_SimConstants.KICK_CALL_WINDOW_TICKS
+                || !_play.Kind.HasLiveCall())
+            {
+                return;
+            }
+
+            _callSheetEpisode = _play.EpisodeIndex;
+
+            // The QB challenge: the human picked it, and the script's odds would be
+            // a forecast of a call nobody is making.
+            if (_humanControl != null && _humanControl.HumanOnOffense)
+            {
+                _callSheet.ReportOffense(_play.EpisodeIndex, null, Systems_CallSource.Human);
+                return;
+            }
+
+            BehaviorParameters behaviorParameters = GetComponent<BehaviorParameters>();
+            bool scripted = behaviorParameters == null
+                || behaviorParameters.Model == null
+                || behaviorParameters.IsInHeuristicMode();
+
+            if (!scripted)
+            {
+                _callSheet.ReportOffense(_play.EpisodeIndex, null, Systems_CallSource.Policy);
+                return;
+            }
+
+            Agent_PlayCaller.Chances(
+                _play.Down,
+                _play.YardsToGo,
+                Systems_FieldModel.YardsToAttackingGoal(Position.y),
+                IsDeepShotPlay(),
+                _callChances);
+
+            _callSheet.ReportOffense(_play.EpisodeIndex, _callChances, Systems_CallSource.Scripted);
+        }
+
+        /// <summary>
+        /// The kick-or-go call, before the snap, on fourth down. Anything but a kick
+        /// is refused by Systems_PlayModel.LatchCall in this window.
+        /// </summary>
+        private void HandlePreSnapCall(ActionBuffers actions)
+        {
+            if (!_play.CanCallKick)
+            {
+                return;
+            }
+
+            _play.LatchCall((Systems_PlayCall)actions.DiscreteActions[PLAY_CALL_BRANCH]);
+
+            if (_play.CallIsLatched)
+            {
+                ChargeCallRepetition(_play.Call);
+            }
+        }
+
+        /// <summary>A carrier who asks to pitch it, and can, does.</summary>
+        private void HandlePitch(ActionBuffers actions)
+        {
+            if (actions.DiscreteActions[LATERAL_BRANCH] != LATERAL_PITCH || !CanLateral())
+            {
+                return;
+            }
+
+            _ballSystem.TryLateral(this, Vector2.zero);
+        }
+
+        /// <summary>
+        /// The quarterback commits to a call on its first decision after the snap
+        /// and then executes it. The call is latched by the model, so anything sent
+        /// on later steps is ignored.
+        /// </summary>
+        private void HandleQuarterback(ActionBuffers actions)
+        {
+            ActionSegment<int> discrete = actions.DiscreteActions;
+
+            // Index 0 of the branch means "no call yet" and casts to
+            // Systems_PlayCall.None, which LatchCall rejects. That is the entire
+            // guard, and it holds regardless of timing.
+            //
+            // What it replaces: the branch was four wide, the agent added one to
+            // the index, and so a ZERO — which is what ML-Agents stores between
+            // EndEpisode and the next decision — decoded to a deliberate
+            // KeepQuarterback. The old defence was to wait DECISION_PERIOD physics
+            // ticks before latching, which assumes the Academy's step counter lines
+            // up with an episode boundary the director chose independently. In
+            // football_base03 the quarterback latched Keep on 8 of 8 instrumented
+            // plays and possession never changed hands once.
+            // The dropback. Nothing is committed until the quarterback has had
+            // DROPBACK_TICKS to retreat and read the rush — before that, whatever
+            // the policy emits on branch 0 is ignored, exactly as index 0 is.
+            // Committing on the first decision step meant choosing off the pre-snap
+            // alignment alone; see Systems_SimConstants.DROPBACK_TICKS.
+            // A human quarterback commits the moment he acts — the handoff, the
+            // throw, the pitch, crossing the line — not at the dropback: there is no
+            // dropback to wait for when a person is reading the field.
+            if (!_play.CallIsLatched
+                && (_play.PhysicsTick >= Systems_SimConstants.DROPBACK_TICKS || IsHumanControlled()))
+            {
+                _play.LatchCall((Systems_PlayCall)discrete[0]);
+
+                // Priced the moment the call is committed, not at the whistle, so
+                // the penalty lands on the decision that earned it rather than
+                // being smeared across whatever the play then did.
+                if (_play.CallIsLatched)
+                {
+                    ChargeCallRepetition(_play.Call);
+                }
+            }
+
+            // Still checked here although the mask already enforces it: the mask is
+            // written once per decision and the action is repeated for the ticks in
+            // between, so the ball can change hands or the quarterback cross the line
+            // after the mask was computed.
+            //
+            // The line-of-scrimmage clause went unnoticed for a long time because the
+            // scripted quarterback holds the pocket (IsHoldingThePocket) and never
+            // crosses the line while the throw window is open; a trained policy is
+            // under no such habit and would find it.
+            if (discrete[THROW_BRANCH] != THROW_RELEASE)
+            {
+                return;
+            }
+
+            ActionSegment<float> continuous = actions.ContinuousActions;
+            Vector2 aim = new Vector2(continuous[2], continuous[3]);
+
+            if (CanReleasePass())
+            {
+                _ballSystem.Throw(this, aim, Mathf.Clamp01(aim.magnitude));
+                return;
+            }
+
+            // NO PASS ON — A PITCH, IF THERE IS A MAN TO PITCH TO (revision 14). The
+            // option, a fake punt, a scramble that runs out of room.
+            //
+            // Along the aim, or to the nearest trailing man if nobody is along it
+            // (revision 17): the mask enabled this release on CanLateral, which
+            // looks for the nearest, so the release has to be able to find him.
+            if (CanLateral())
+            {
+                Agent_ActionLegality.TryPitch(_ballSystem, this, aim);
+            }
+        }
+
+        /// <summary>
+        /// One tick of the control-effort KPIs. Every term is dimensionless and
+        /// already in a bounded range, so the episode mean is directly comparable
+        /// between a lineman and a receiver despite their very different forces.
+        ///
+        /// <paramref name="steerCommand"/> is the CLAMPED steer action rather than
+        /// the torque, because jerk is a property of what the policy asked for. A
+        /// policy alternating -1, +1, -1 every tick scores 2.0 here while its mean
+        /// torque is ~0 — which is the whole point, and the reason mean effort
+        /// alone cannot see chatter.
+        /// </summary>
+        private void AccumulateControlEffort(
+            float driveForce, float steerTorque, float steerCommand, float driveCommand)
+        {
+            _effortSum += (Mathf.Abs(driveForce) / _driveForce)
+                + (Mathf.Abs(steerTorque) / _steerTorque);
+
+            _steerJerkSum += Mathf.Abs(steerCommand - _previousSteerCommand);
+            _previousSteerCommand = steerCommand;
+
+            _speedSum += Mathf.Clamp01(
+                _rigidbody.linearVelocity.magnitude / _topSpeed);
+
+            float driveSize = Mathf.Abs(driveCommand);
+            _driveCommandSum += driveSize;
+
+            if (driveSize >= DRIVE_SATURATION_THRESHOLD)
+            {
+                _driveSaturatedTicks++;
+            }
+
+            _effortTicks++;
+        }
+
+        /// <summary>
+        /// Once per decision, on its first applied tick: how far the command moved
+        /// from the previous decision's. A play's first decision is measured from
+        /// standing, which is honest — starting to run IS a change of command.
+        /// </summary>
+        private void AccumulateCommandJerk(Vector2 command)
+        {
+            if (!_isFreshCommand)
+            {
+                return;
+            }
+
+            _isFreshCommand = false;
+            _commandJerkSum += (command - _previousCommand).magnitude;
+            _previousCommand = command;
+            _commandDecisions++;
+        }
+
+        /// <summary>
+        /// Writes the control-effort KPIs for the play that just ended, then clears
+        /// them for the next one.
+        ///
+        /// Guarded on the communicator, not on a scene check: these series exist to
+        /// be read in TensorBoard, and a played game has no trainer to report to.
+        /// That is the same reason Agent_Telemetry is placed only in
+        /// SCN_TRAIN_FOOTBALL — but this code lives on all 22 players in every
+        /// scene, so it needs the guard rather than the placement.
+        /// </summary>
+        private void FlushControlEffort()
+        {
+            if (_effortTicks <= 0)
+            {
+                return;
+            }
+
+            if (Academy.IsInitialized && Academy.Instance.IsCommunicatorOn)
+            {
+                StatsRecorder stats = Academy.Instance.StatsRecorder;
+                float ticks = _effortTicks;
+
+                // Mean applied load per tick, in units of this role's own maximum.
+                // 0 is coasting, 2 is full drive and full steer simultaneously.
+                stats.Add("Control/Effort", _effortSum / ticks);
+
+                // Mean tick-to-tick change in the steer command. Smooth steering is
+                // near 0; full-scale chatter approaches 2.
+                stats.Add("Control/SteerJerk", _steerJerkSum / ticks);
+
+                // Mean change in the velocity command between decisions, 0 to 2.8.
+                if (_commandDecisions > 0)
+                {
+                    stats.Add("Control/CommandJerk", _commandJerkSum / _commandDecisions);
+                }
+
+                // Mean speed as a fraction of this role's top speed. The closest
+                // thing here to velocity tracking: it says whether players are
+                // actually running or milling about.
+                stats.Add("Control/SpeedUtilization", _speedSum / ticks);
+
+                // How often the pileup-explosion guard fired. Should be ~0; a
+                // nonzero value means the solver is blowing contacts apart and the
+                // dynamics are not the ones any policy was fitted against.
+                stats.Add("Control/SpeedClampRate", _speedClampHits / ticks);
+
+                stats.Add("Control/Fatigue", _fatigue);
+
+                // Per role: mean |drive| in [0, 1], and the share of ticks it was
+                // at the rail. Keys are built once in Awake.
+                stats.Add(_driveStatKey, _driveCommandSum / ticks);
+                stats.Add(_driveSaturationStatKey, _driveSaturatedTicks / ticks);
+            }
+
+            _effortSum = 0f;
+            _steerJerkSum = 0f;
+            _speedSum = 0f;
+            _previousSteerCommand = 0f;
+            _effortTicks = 0;
+            _commandJerkSum = 0f;
+            _commandDecisions = 0;
+            _previousCommand = Vector2.zero;
+            _speedClampHits = 0;
+            _driveCommandSum = 0f;
+            _driveSaturatedTicks = 0;
+        }
+
+        /// <summary>
+        /// Load comes from APPLIED FORCE, never from the action vector. A player
+        /// braced against a block is a near-zero action at near-maximum force, and
+        /// reading the action would score that as resting (CLAUDE.md section 2).
+        ///
+        /// Each term is divided by this role's own maximum, so load is
+        /// dimensionless and lands in [0, 3]. The previous form summed newtons and
+        /// newton-metres directly, which is not a quantity, and the constants it
+        /// was scaled by could not accumulate against the recovery rate at all —
+        /// fatigue was pinned at zero for the whole of base01 through base03.
+        /// </summary>
+        private void AccumulateFatigue(float driveForce, float steerTorque)
+        {
+            // The third term is what the first two could never see. They are the
+            // action times a constant, so a lineman held in a block he is not
+            // driving into contributed nothing — the bracing case the summary
+            // above is about. The impulse is what the solver resolved against this
+            // body over the last step; over the step length it is a force, and
+            // over this role's own drive force it is the same unit as the others.
+            float contactLoad = Mathf.Min(
+                _contactImpulse / (Time.fixedDeltaTime * _driveForce),
+                Systems_SimConstants.FATIGUE_CONTACT_LOAD_MAX);
+
+            _contactImpulse = 0f;
+
+            float driveLoad = Mathf.Abs(driveForce) / _driveForce;
+            float steerLoad = Mathf.Abs(steerTorque) / _steerTorque;
+            float load = driveLoad + steerLoad + contactLoad;
+
+            // Read by the DEBUG sheet only, to check the claim above at run time:
+            // that the contact term is actually carrying load. Nothing reads it
+            // back into the simulation.
+            if (_health != null)
+            {
+                _health.RecordLoad(driveLoad, steerLoad, contactLoad);
+            }
+
+            _fatigue += load
+                * Systems_SimConstants.FATIGUE_GAIN_PER_UNIT_LOAD
+                * Time.fixedDeltaTime;
+            _fatigue -= Systems_SimConstants.FATIGUE_RECOVERY_PER_SECOND * Time.fixedDeltaTime;
+            _fatigue = Mathf.Clamp01(_fatigue);
+        }
+
+        /// <summary>
+        /// What this body was paid over one play, for the TAB overlay: once per
+        /// play, whichever of EndEpisodeNow (training) or the next play's first
+        /// tick (a played game) gets there first.
+        /// </summary>
+        private void ReportPlayReward(int episode)
+        {
+            if (_health == null || episode == _rewardReportedEpisode)
+            {
+                return;
+            }
+
+            float total = GetCumulativeReward();
+            _health.RecordEpisodeReward(episode, total - _rewardAtPlayStart);
+            _rewardAtPlayStart = total;
+            _rewardReportedEpisode = episode;
+        }
+
+        /// <summary>The spin a penalty is measured against: one full turn a second, in radians.</summary>
+        private const float PENALTY_SPIN_SCALE = 2f * Mathf.PI;
+
+        /// <summary>A term's input is capped here, so one solver blow-up cannot dominate a play.</summary>
+        private const float PENALTY_INPUT_CAP = 2f;
+
+        /// <summary>Lifetime sum of each control penalty this body has been charged.</summary>
+        internal Reward_Penalty.Terms PenaltyTotals => new Reward_Penalty.Terms(
+            _penaltyEffortTotal, _penaltySpinTotal, _penaltyJitterTotal, _penaltySlideTotal);
+
+        /// <summary>
+        /// The four control penalties (Reward_Penalty): torque, spin, action jitter
+        /// and sliding across the facing, charged every live tick with the weights
+        /// in the PoFootballRewardPenalties asset (jitter on a decision's first tick).
+        /// </summary>
+        private void ChargeControlPenalties(float driveForce, float steerTorque, float commandStep)
+        {
+            float driveLoad = Mathf.Min(Mathf.Abs(driveForce) / _driveForce, PENALTY_INPUT_CAP);
+            float steerLoad = Mathf.Min(Mathf.Abs(steerTorque) / _steerTorque, PENALTY_INPUT_CAP);
+            float spin = Mathf.Min(
+                Mathf.Abs(_rigidbody.angularVelocity) * Mathf.Deg2Rad / PENALTY_SPIN_SCALE,
+                PENALTY_INPUT_CAP);
+            Vector2 velocity = _rigidbody.linearVelocity;
+            Vector2 facing = _transform.up;
+            float across = Mathf.Abs((velocity.x * facing.y) - (velocity.y * facing.x));
+            float slip = Mathf.Min(across / Mathf.Max(_topSpeed, 0.01f), PENALTY_INPUT_CAP);
+
+            Reward_Penalty.Terms terms = Reward_Penalty.PerTick(
+                in _penaltyWeights, driveLoad, steerLoad, spin, commandStep, slip);
+
+            float total = terms.Total;
+            AddReward(total);
+            _penaltyRewardSum += total;
+            _penaltyEffortTotal += terms.Effort;
+            _penaltySpinTotal += terms.AngularVelocity;
+            _penaltyJitterTotal += terms.ActionJitter;
+            _penaltySlideTotal += terms.Slide;
+
+            if (_health != null)
+            {
+                _health.RecordPenalties(terms.Effort, terms.AngularVelocity, terms.ActionJitter, terms.Slide);
+            }
+        }
+
+        /// <summary>
+        /// Pileup-explosion guard (acceptance criterion #13). Sits above the
+        /// fastest role's terminal velocity, so it only ever fires on a collision
+        /// the solver has blown apart — it is not what limits running speed. That
+        /// is LINEAR_DAMPING against the role's derived drive force.
+        /// </summary>
+        private void ClampSpeed()
+        {
+            Vector2 velocity = _rigidbody.linearVelocity;
+            float maxSpeed = Systems_SimConstants.MAX_BODY_SPEED;
+
+            if (velocity.sqrMagnitude > maxSpeed * maxSpeed)
+            {
+                _rigidbody.linearVelocity = velocity.normalized * maxSpeed;
+                _speedClampHits++;
+
+                if (_health != null)
+                {
+                    _health.CountSpeedClamp();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Every dense term, paid per physics tick: the shared yardage signal and
+        /// this player's own role-shaped term.
+        ///
+        /// Both baselines are seeded on the first tick of a new episode rather than
+        /// paid out, so neither the jump from the previous play's dead-ball spot to
+        /// this play's snap nor the re-formation of all 22 bodies is scored as
+        /// progress or pursuit.
+        /// </summary>
+        private void AwardDenseRewards()
+        {
+            float ballY = _play.BallY;
+            Vector2 ballPosition = _ball == null ? Position : _ball.Position;
+            float ballDistance = Vector2.Distance(Position, ballPosition);
+            float interceptPotential = _side == Systems_TeamSide.Defense
+                ? CurrentInterceptPotential(ballPosition)
+                : 0f;
+
+            int epoch = _ball == null ? 0 : _ball.PossessionEpoch;
+
+            // A new play, or the ball changed sides, was kicked or came loose since
+            // the last tick: re-baseline, pay nothing across the gap. See
+            // Reward_Progress.CountsAsProgress.
+            // A played game never ends an episode (the boundary is a no-op there),
+            // so the play just finished is reported when the next one starts.
+            if (_lastSeenEpisode >= 0 && _lastSeenEpisode != _play.EpisodeIndex)
+            {
+                ReportPlayReward(_lastSeenEpisode);
+            }
+
+            if (_lastSeenEpisode != _play.EpisodeIndex || epoch != _lastPossessionEpoch)
+            {
+                _lastSeenEpisode = _play.EpisodeIndex;
+                _lastPossessionEpoch = epoch;
+                _previousBallY = ballY;
+                _previousBallDistance = ballDistance;
+                _previousInterceptPotential = interceptPotential;
+                return;
+            }
+
+            // A pass in flight is not progress yet: the baseline stays at the
+            // release point and the catch pays the whole distance at once (see
+            // Reward_Progress.CountsAsProgress). The time cost still runs.
+            bool countsAsProgress = Reward_Progress.CountsAsProgress(
+                _ball == null ? Systems_BallState.Held : _ball.State);
+
+            // Nor the dropback: behind the line, before the throw, the baseline
+            // stays at the snap. See Reward_Progress.HoldsBaselineInBackfield.
+            bool holdsBaseline = Reward_Progress.HoldsBaselineInBackfield(
+                _play.Kind == Systems_PlayKind.Scrimmage,
+                _play.PossessionChanged,
+                _play.ForwardPassThrown,
+                _play.PhysicsTick,
+                ballY,
+                _play.LineOfScrimmageY);
+
+            float yardsDelta = 0f;
+
+            if (countsAsProgress && !holdsBaseline)
+            {
+                yardsDelta = (ballY - _previousBallY) / Systems_FieldModel.YARD;
+                _previousBallY = ballY;
+            }
+
+            float progressReward = Reward_Progress.PerTick(_side, yardsDelta);
+            float roleReward = RoleReward(ballPosition, ballDistance, interceptPotential, countsAsProgress);
+
+            AddReward(progressReward);
+            AddReward(roleReward);
+            _progressRewardSum += progressReward;
+            _roleRewardSum += roleReward;
+
+            _previousBallDistance = ballDistance;
+            _previousInterceptPotential = interceptPotential;
+        }
+
+        /// <summary>
+        /// This defender's Reward_Role.InterceptPotential against the ball: the
+        /// carrier's body and velocity while it is held (the ball model reports
+        /// zero velocity while Held), the ball's own while it is loose. At this
+        /// player's trait-adjusted top speed — the speed InterceptOf steers the
+        /// scripted defender at — so the reward and the heuristic agree on what a
+        /// good angle is.
+        /// </summary>
+        private float CurrentInterceptPotential(Vector2 ballPosition)
+        {
+            Systems_IPlayerHandle carrier = CurrentCarrier();
+
+            Vector2 targetPosition = carrier == null ? ballPosition : carrier.Position;
+            Vector2 targetVelocity = carrier == null
+                ? (_ball == null ? Vector2.zero : _ball.Velocity)
+                : carrier.Velocity;
+
+            return Reward_Role.InterceptPotential(
+                Reward_Role.InterceptSeconds(Position, _topSpeed, targetPosition, targetVelocity));
+        }
+
+        /// <summary>
+        /// The part of the reward that is this player's alone. Everything else on
+        /// the sheet is identical for all eleven team-mates, so without this a
+        /// guard who held his block and a guard who wandered off are the same
+        /// gradient (see Reward_Role).
+        /// </summary>
+        private float RoleReward(
+            Vector2 ballPosition, float ballDistance, float interceptPotential, bool ballIsGrounded)
+        {
+            // SINCE REVISION 14 THE BALL CAN BE EITHER SIDE'S. Pursuit is the job of
+            // whichever side does not have it; the offense's blocking and route
+            // shaping only mean anything while the offense does, and a defense
+            // returning a pick is not rewarded for running at its own man.
+            bool heldByOffense = _ball == null
+                || !_ball.IsHeld
+                || _ball.PossessingSide == Systems_TeamSide.Offense;
+
+            if (_side == Systems_TeamSide.Offense && !heldByOffense)
+            {
+                return Reward_Role.Pursuit(_previousBallDistance - ballDistance);
+            }
+
+            if (_side == Systems_TeamSide.Defense && !heldByOffense)
+            {
+                return 0f;
+            }
+
+            if (_side == Systems_TeamSide.Defense)
+            {
+                // Not while the ball is in the air. A 25 m/s pass moves away from
+                // most of the defense and toward a few of them whatever any of them
+                // does, so pursuit measured against it was noise the size of a
+                // whole play's honest pursuit, uncorrelated with the action. The
+                // caller still moves the baseline, so the catch is not paid either.
+                //
+                // THE ANGLE, NOT THE DISTANCE (football_base24). Closing distance
+                // paid a defender for running at the ball's current spot — pure
+                // pursuit, which arrives where the carrier was and catches nobody
+                // at equal speed. The fall in time-to-intercept pays for the cut
+                // that meets him. See Reward_Role.InterceptPotential.
+                return ballIsGrounded
+                    ? Reward_Role.InterceptShaping(_previousInterceptPotential, interceptPotential)
+                    : 0f;
+            }
+
+            if (_isBlocker)
+            {
+                Systems_IPlayerHandle rusher = NearestOpponent();
+                return rusher == null
+                    ? 0f
+                    : Reward_Role.Block(Position, rusher.Position, ballPosition);
+            }
+
+            if (_isReceiver && !_isCarrier)
+            {
+                Systems_IPlayerHandle defender = NearestOpponent();
+                // Paid only at the depth the call asked for (revision 14), which
+                // is the whole of what makes Pass and PassDeep different plays.
+                return defender == null
+                    ? 0f
+                    : Reward_Role.Separation(Vector2.Distance(Position, defender.Position))
+                        * Reward_Role.OnRoute(
+                            _play.Call,
+                            (Position.y - _play.LineOfScrimmageY) / Systems_FieldModel.YARD);
+            }
+
+            return 0f;
+        }
+
+        /// <summary>
+        /// Nearest player on the other side. A linear scan of the fixed-capacity
+        /// registry — 21 comparisons, no allocation, no physics query. A
+        /// Physics2D.OverlapCircle would be the obvious alternative and is worse
+        /// here: it allocates unless given a preallocated buffer, and it reads
+        /// collider positions from the previous solver step rather than the
+        /// rigidbody positions the rest of the reward geometry uses.
+        /// </summary>
+        private Systems_IPlayerHandle NearestOpponent()
+        {
+            if (_registry == null)
+            {
+                return null;
+            }
+
+            Vector2 position = Position;
+            Systems_IPlayerHandle best = null;
+            float bestSquared = float.MaxValue;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle candidate = _registry.Get(slotIndex);
+                if (candidate == null || candidate.Side == _side)
+                {
+                    continue;
+                }
+
+                float squared = (candidate.Position - position).sqrMagnitude;
+                if (squared < bestSquared)
+                {
+                    bestSquared = squared;
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// Adds this collision's resolved normal impulse to the running total
+        /// AccumulateFatigue spends on the next tick. Every contact counts, a
+        /// team-mate's and the boundary's included: being leaned on is load
+        /// whoever is doing the leaning.
+        /// </summary>
+        private void AccumulateContactImpulse(Collision2D collision)
+        {
+            int contactCount = collision.contactCount;
+
+            for (int contactIndex = 0; contactIndex < contactCount; contactIndex++)
+            {
+                _contactImpulse += Mathf.Abs(collision.GetContact(contactIndex).normalImpulse);
+            }
+        }
+
+        private void OnCollisionEnter2D(Collision2D collision)
+        {
+            AccumulateContactImpulse(collision);
+
+            if (!collision.gameObject.TryGetComponent(out Agent_FootballPlayer other))
+            {
+                return;
+            }
+
+            if (other.Side == _side)
+            {
+                return;
+            }
+
+            ReportContactToOfficials(other, collision, true);
+
+            if (!_isCarrier)
+            {
+                ReportOffBallContact(other, collision);
+                return;
+            }
+
+            if (_referee == null)
+            {
+                return;
+            }
+
+            _referee.ReportContactWithCarrier(other.Id, collision.relativeVelocity.magnitude);
+        }
+
+        /// <summary>
+        /// A collision between two opponents neither of whom has the ball, handed
+        /// to presentation. Nothing in the simulation reads it — no reward, no
+        /// rule, no observation — so it is not part of the action contract and a
+        /// brain cannot tell whether it is being reported.
+        ///
+        /// ONE REPORT PER PAIR. Both bodies get this callback for the same
+        /// collision, so the lower id speaks for the two of them.
+        ///
+        /// THE CARRIER'S CONTACTS ARE NOT REPORTED, from either side. Those belong
+        /// to the referee, and the one that brings him down is already published
+        /// as Systems_TackleMessage — reporting it here as well would draw and
+        /// sound the same hit twice.
+        ///
+        /// ONLY WHILE THE PLAY IS LIVE. The reset between plays teleports
+        /// twenty-two bodies into a formation, and a pair that lands overlapping
+        /// is separated by the solver with an impulse that no block produced.
+        /// </summary>
+        private void ReportOffBallContact(Agent_FootballPlayer other, Collision2D collision)
+        {
+            if (_contactSink == null || other._isCarrier
+                || _formationSlotIndex > other._formationSlotIndex)
+            {
+                return;
+            }
+
+            if (_play == null || _play.Phase != Systems_PlayPhase.Live
+                || collision.contactCount == 0)
+            {
+                return;
+            }
+
+            ContactPoint2D contact = collision.GetContact(0);
+
+            _contactSink.Report(contact.point, contact.normal, contact.normalImpulse);
+        }
+
+        /// <summary>
+        /// Fires every physics tick the carrier stays in contact. Feeds the
+        /// wrap-up tackle rule, which is the only way a defender chasing from
+        /// behind can end a play — a pursuit at matched speed has almost no
+        /// relative velocity for OnCollisionEnter2D to measure.
+        /// </summary>
+        private void OnCollisionStay2D(Collision2D collision)
+        {
+            AccumulateContactImpulse(collision);
+
+            if (!collision.gameObject.TryGetComponent(out Agent_FootballPlayer other))
+            {
+                return;
+            }
+
+            if (other.Side == _side)
+            {
+                return;
+            }
+
+            ReportContactToOfficials(other, collision, false);
+
+            if (!_isCarrier || _referee == null)
+            {
+                return;
+            }
+
+            float relativeSpeed = collision.relativeVelocity.magnitude;
+
+            _referee.ReportSustainedContact(other.Id, relativeSpeed);
+
+            // The same contact, handed to presentation so the wrap-up can be
+            // heard. After the referee and reading nothing back from it, so the
+            // rule above sees exactly what it saw before this line existed; in
+            // training the sink is the null object.
+            if (_contactSink != null && collision.contactCount > 0)
+            {
+                _contactSink.ReportGrind(collision.GetContact(0).point, relativeSpeed);
+            }
+        }
+
+        /// <summary>
+        /// Every contact with an opponent, to the officials. ONE REPORT PER PAIR:
+        /// both bodies get the callback, so the lower slot speaks for both. Revision
+        /// 14 — before it nobody was watching.
+        /// </summary>
+        private void ReportContactToOfficials(
+            Agent_FootballPlayer other, Collision2D collision, bool isNewContact)
+        {
+            if (_penalties == null || _formationSlotIndex > other._formationSlotIndex)
+            {
+                return;
+            }
+
+            _penalties.ReportContact(
+                _formationSlotIndex, other._formationSlotIndex,
+                collision.relativeVelocity.magnitude, isNewContact);
+        }
+
+        public void RestBetweenPlays()
+        {
+            _fatigue *= Systems_SimConstants.FATIGUE_CARRIED_BETWEEN_PLAYS;
+
+            // Whatever the solver resolved against this body after the whistle,
+            // and whatever the re-formation is about to resolve, is not exertion.
+            _contactImpulse = 0f;
+        }
+
+        public void ResetTo(Vector2 position)
+        {
+            // Every play, because training redraws the roster every play; in a
+            // game this writes the same values back.
+            ApplyTraits(_roster == null ? default : _roster.TraitsOf(_formationSlotIndex));
+
+            float rotation = _side == Systems_TeamSide.Offense ? 0f : 180f;
+
+            _transform.SetPositionAndRotation(
+                new Vector3(position.x, position.y, 0f),
+                Quaternion.Euler(0f, 0f, rotation));
+
+            _rigidbody.position = position;
+            _rigidbody.rotation = rotation;
+            _rigidbody.linearVelocity = Vector2.zero;
+            _rigidbody.angularVelocity = 0f;
+            _commandedVelocity = Vector2.zero;
+        }
+
+        /// <summary>
+        /// The command as the velocity it asks for in world space: the decision's
+        /// frame, |command| capped at 1, times top speed, zero inside the deadzone
+        /// — Agent_VelocityController.Resolve's reading of it, before the backpedal
+        /// cap. Presentation only.
+        /// </summary>
+        private Vector2 CommandInWorld(Vector2 command)
+        {
+            float length = command.magnitude;
+
+            if (length < Systems_SimConstants.VELOCITY_COMMAND_DEADZONE)
+            {
+                return Vector2.zero;
+            }
+
+            Vector2 frameLeft = new Vector2(-_commandFrameUp.y, _commandFrameUp.x);
+            Vector2 direction = ((_commandFrameUp * command.x) + (frameLeft * command.y)) / length;
+            return direction * (Mathf.Min(length, 1f) * _topSpeed);
+        }
+
+        public void Freeze()
+        {
+            _commandedVelocity = Vector2.zero;
+            _rigidbody.linearVelocity = Vector2.zero;
+            _rigidbody.angularVelocity = 0f;
+        }
+
+        public void Nudge(Vector2 velocity)
+        {
+            _rigidbody.linearVelocity = velocity;
+        }
+
+        public void ApplyTerminalReward(in Systems_PlayResult result)
+        {
+            float terminalReward = Reward_Terminal.For(_side, in result);
+
+            AddReward(terminalReward);
+            _terminalRewardSum += terminalReward;
+        }
+
+        public void EndEpisodeNow()
+        {
+            // The fouler's own bill, before the episode closes (Reward_Terminal.OwnFouls).
+            if (_play != null)
+            {
+                float ownFouls = Reward_Terminal.OwnFouls(_play, Id, _side);
+
+                if (ownFouls != 0f)
+                {
+                    AddReward(ownFouls);
+                    _terminalRewardSum += ownFouls;
+                }
+            }
+
+            // BEFORE EndEpisode, not after. EndEpisode is what closes the trajectory
+            // the trainer attributes these steps to, and a stat written after it
+            // lands in the next play's window.
+            FlushControlEffort();
+            FlushRewardLedger();
+
+            // The TAB overlay's episode reward: what this body was paid this play.
+            if (_play != null)
+            {
+                ReportPlayReward(_play.EpisodeIndex);
+            }
+
+            EndEpisode();
+            _rewardAtPlayStart = 0f;
+        }
+
+        /// <summary>
+        /// Writes what each reward term paid this play, then clears the sums.
+        /// Guarded on the communicator for the reason FlushControlEffort is.
+        /// </summary>
+        private void FlushRewardLedger()
+        {
+            if (Academy.IsInitialized && Academy.Instance.IsCommunicatorOn)
+            {
+                StatsRecorder stats = Academy.Instance.StatsRecorder;
+
+                stats.Add(_ledgerProgressKey, _progressRewardSum);
+                stats.Add(_ledgerRoleKey, _roleRewardSum);
+                stats.Add(_ledgerCallKey, _callRewardSum);
+                stats.Add(_ledgerTerminalKey, _terminalRewardSum);
+                stats.Add(_ledgerPenaltyKey, _penaltyRewardSum);
+
+                float paid = Mathf.Abs(_progressRewardSum) + Mathf.Abs(_roleRewardSum)
+                    + Mathf.Abs(_callRewardSum) + Mathf.Abs(_terminalRewardSum);
+
+                if (paid > 0f)
+                {
+                    stats.Add(_ledgerShapingShareKey, Mathf.Abs(_roleRewardSum) / paid);
+                }
+            }
+
+            _progressRewardSum = 0f;
+            _roleRewardSum = 0f;
+            _callRewardSum = 0f;
+            _terminalRewardSum = 0f;
+            _penaltyRewardSum = 0f;
+        }
+
+        /// <summary>
+        /// Possession moves between the quarterback, the backs and any receiver who
+        /// makes a catch, so the ball carrier is highlighted white — at the scale
+        /// this renders at, a colour swap is the only thing readable.
+        ///
+        /// Presentation living on the agent rather than in PoFootball.Views is a
+        /// deliberate compromise: SetCarrier is already the exact hook where
+        /// possession changes, and a separate view would need its own copy of the
+        /// formation slot index to know which player it belongs to. SpriteRenderer
+        /// .color is per-instance and does not clone the material, so batching is
+        /// unaffected (.claude/rules/performance.md).
+        /// </summary>
+        public void SetCarrier(bool isCarrier)
+        {
+            _isCarrier = isCarrier;
+
+            if (_spriteRenderer != null)
+            {
+                _spriteRenderer.color = isCarrier ? Color.white : _teamColor;
+            }
+        }
+
+        /// <summary>
+        /// Rebinds the base colour cached in Awake. Called when possession changes,
+        /// so the offense unit wears the colour of the team that actually has the
+        /// ball rather than a fixed "offense is blue".
+        ///
+        /// The carrier check is the whole subtlety: repainting a carrier would erase
+        /// the white highlight mid-play. Storing it and letting SetCarrier(false)
+        /// apply it later keeps the two writers in one order.
+        /// </summary>
+        public void SetTeamColor(Color color)
+        {
+            _teamColor = color;
+
+            if (_spriteRenderer != null && !_isCarrier)
+            {
+                _spriteRenderer.color = color;
+            }
+        }
+
+        /// <summary>
+        /// Scripted football, used whenever no trained brain is bound — which,
+        /// until a set is promoted against the current contract, is always.
+        ///
+        /// WHY THIS IS NOT A STUB ANY MORE. It used to write zeros for everyone and
+        /// a Keep call for the quarterback. That is a legal action vector, so the
+        /// down machinery ran and the clock advanced, but nobody moved: every play
+        /// hit the 750-tick cap and expired, no tackle ever happened, no pass was
+        /// ever thrown, and the entire game was twenty-two stationary shapes. The
+        /// app was unreviewable without a trained brain, and there is no trained
+        /// brain.
+        ///
+        /// It is deliberately simple — pursue, block, run, throw — and makes no
+        /// attempt to be good. Its job is to exercise every branch of the rules
+        /// layer (tackles, incompletions, interceptions, touchdowns, turnovers on
+        /// downs, safeties) so a playthrough is worth watching and a bug in the
+        /// game layer has somewhere to show itself.
+        ///
+        /// STEERING IS A VELOCITY since revision 17: Steer asks for a direction and
+        /// a speed, and Agent_VelocityController — the same actuator every trained
+        /// brain drives — does the turning. Through revision 16 the body was
+        /// car-like at the action level and this method had to turn it by hand.
+        /// </summary>
+        public override void Heuristic(in ActionBuffers actionsOut)
+        {
+            ActionSegment<float> continuousActions = actionsOut.ContinuousActions;
+            ActionSegment<int> discreteActions = actionsOut.DiscreteActions;
+
+            for (int index = 0; index < continuousActions.Length; index++)
+            {
+                continuousActions[index] = 0f;
+            }
+
+            for (int index = 0; index < discreteActions.Length; index++)
+            {
+                discreteActions[index] = 0;
+            }
+
+            if (_play == null)
+            {
+                return;
+            }
+
+            // Before the snap the bodies are set; the only scripted decision is the
+            // quarterback's kick-or-go on fourth down.
+            if (_play.Phase == Systems_PlayPhase.PreSnap)
+            {
+                // On a human down the kick is a card he picks (Systems_QbChallengeSystem).
+                if (_hasQuarterbackActions && _play.CanCallKick
+                    && (_humanControl == null || !_humanControl.HumanOnOffense))
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = (int)ChooseKickCall();
+                }
+
+
+                return;
+            }
+
+            if (_play.Phase != Systems_PlayPhase.Live)
+            {
+                return;
+            }
+
+            // Cleared before TargetPoint, which sets it again only for the zone
+            // branches. Full throttle is the default and anything that wants
+            // damping has to ask for it.
+            _settleRadius = 0f;
+
+            if (IsHumanControlled())
+            {
+                HumanControl(continuousActions, discreteActions);
+                return;
+            }
+
+            Steer(continuousActions, TargetPoint());
+
+            // ON A HUMAN DOWN NOBODY CALLS FOR HIM. A quarterback the human is not
+            // steering at this moment — the ball came loose, say — would otherwise
+            // write the script's planned call, and the dropback latch would commit
+            // the human to it.
+            if (_hasQuarterbackActions
+                && (_humanControl == null || !_humanControl.HumanOnOffense))
+            {
+                HeuristicQuarterback(continuousActions, discreteActions);
+            }
+            else
+            {
+                HeuristicPitch(discreteActions);
+            }
+        }
+
+        /// <summary>
+        /// Where this player wants to be. One expression per job, which is the
+        /// whole of the "tactics".
+        /// </summary>
+        private Vector2 TargetPoint()
+        {
+            Vector2 position = Position;
+
+            // A kneel-down or a spike: nobody plays.
+            if (_play.Kind == Systems_PlayKind.KneelDown || _play.Kind == Systems_PlayKind.Spike)
+            {
+                return position;
+            }
+
+            if (TrySpecialTeamsTarget(position, out Vector2 specialTeams))
+            {
+                return specialTeams;
+            }
+
+            // A LOOSE BALL IS EVERYBODY'S NEAR IT (revision 14). Whoever can get
+            // there in a few strides goes for it; the rest keep their jobs.
+            if (_ball != null && _ball.IsLoose
+                && Vector2.Distance(position, _ball.Position) < LOOSE_BALL_CHASE_METRES)
+            {
+                return _ball.Position;
+            }
+
+            // A pitch in the air: the side that threw it goes to meet it.
+            if (_ball != null && _ball.IsInFlight && _ball.PassKind == Systems_PassKind.Lateral
+                && Vector2.Distance(position, _ball.Position) < LATERAL_CHASE_METRES)
+            {
+                return _ball.Position;
+            }
+
+            // Whoever has the ball runs at the goal line, drifting toward whichever
+            // side of the field the nearest defender is not on. That drift is what
+            // produces runs that break outside instead of everyone piling up on the
+            // hash marks.
+            // The scripted dropback, and then the pocket. A quarterback holding the
+            // ball retreats off the line rather than running at the goal line like
+            // any other carrier, which is what gives the pocket time to form and the
+            // receivers time to get downfield.
+            //
+            // IT USED TO END THE INSTANT THE CALL LATCHED, and that was wrong. The
+            // call latches DROPBACK_TICKS after the snap and the heuristic does not
+            // release until THROW_AT_TICK, so a quarterback that had just committed
+            // to a PASS spent the twenty ticks in between falling through to the
+            // ordinary carrier branch below — turning round and running at the goal
+            // line, straight into the four linemen rushing it, while still holding
+            // the ball it was about to throw. Only once the throw window closes is
+            // it really out of options, and only then does it scramble.
+            // A RUN DOES NOT DROP BACK. The call is drawn before the latch
+            // (PlannedCall), so on a planned run the quarterback stays at the depth
+            // he took the snap at — out of his own end zone if he took it there —
+            // and the back meets him there, instead of seven yards deep.
+            if (_isCarrier && _hasQuarterbackActions && !_play.CallIsLatched
+                && _play.Kind.HasLiveCall()
+                && IsRunCall(PlannedCall()))
+            {
+                return new Vector2(
+                    position.x,
+                    Mathf.Max(
+                        position.y,
+                        Systems_FieldModel.OWN_GOAL_LINE_Y + RUN_GOAL_LINE_CUSHION_METRES));
+            }
+
+            if (_isCarrier && _hasQuarterbackActions && IsHoldingThePocket())
+            {
+                float dropback = _play.LineOfScrimmageY
+                    - (Systems_SimConstants.DROPBACK_DEPTH_YARDS * Systems_FieldModel.YARD);
+
+                // AND NOT INTO OUR OWN END ZONE. The drop used to be an unclamped
+                // offset from the line of scrimmage, so any snap inside our own
+                // seven put the target point behind the goal line and the
+                // quarterback walked backwards over it — a safety, two points, and
+                // the ball, conceded by the scripted behaviour on purpose every
+                // time the offense was backed up. A real quarterback shortens the
+                // drop when there is no room behind him, which is exactly what
+                // taking the max does here.
+                float floor = Systems_FieldModel.OWN_GOAL_LINE_Y
+                    + (Systems_SimConstants.POCKET_GOAL_LINE_CUSHION_YARDS
+                        * Systems_FieldModel.YARD);
+
+                return new Vector2(PocketX(position), Mathf.Max(dropback, floor));
+            }
+
+            // THE MESH POINT. On a latched handoff the quarterback runs AT THE BACK,
+            // not at the goal line.
+            //
+            // THIS IS THE STEP THAT WAS MISSING, and IsHoldingThePocket's summary
+            // has always claimed it existed: "on a handoff the quarterback's job is
+            // to close on the back, and Systems_BallSystem.TryHandoff completes on
+            // proximity alone." The first half of that was never implemented. A
+            // handoff drops out of the pocket branch the moment it latches and then
+            // fell straight through to the ordinary carrier branch below — so the
+            // quarterback turned and ran at the goal line still holding the ball,
+            // while the back, no longer clearing the lane either, ran at the goal
+            // line too. Two players four metres apart running the same direction at
+            // the same speed close on each other only by accident, and TryHandoff
+            // needs them inside HANDOFF_RADIUS — two metres.
+            //
+            // Measured over two full games: every handoff that failed to mesh became
+            // a quarterback scramble, 11 of 80 plays in one game ended on the
+            // MAX_PHYSICS_TICKS cap rather than on football, and one side finished a
+            // game with MINUS 44 rushing yards.
+            //
+            // Targeting the back's live position rather than a fixed spot is what
+            // makes it converge: the back is moving, and a static mesh point behind
+            // the line would be stale by the time either arrived.
+            // BOTH SIDES CLOSE ON EACH OTHER, and that redundancy is the point.
+            //
+            // A shallower mesh was tried and measured, because with both closing the
+            // exchange lands near the MIDPOINT — the quarterback lines up 2.5 m
+            // behind the line and the halfback 6.5 m, so the ball changes hands
+            // around 4.5 m deep and the back has four yards to make up before he
+            // reaches the line at all. That really is why a carry averages a couple
+            // of yards here.
+            //
+            // Having the quarterback HOLD his depth and let the back come to him
+            // fixes the geometry and breaks the play. Measured over a full game:
+            // yards per play went NEGATIVE at -0.27, twenty-three of eighty-eight
+            // plays died on the MAX_PHYSICS_TICKS cap, and there were sixteen punts.
+            // A stationary quarterback has no way to recover when the back is held
+            // up or knocked off his path — nobody is closing the gap, so the mesh
+            // simply never happens and the down burns to the cap. Two players
+            // converging always meet; one waiting depends on the other arriving.
+            //
+            // So the depth stays, and the yards-per-carry cost with it. The lever
+            // that actually moved yards per play without breaking the down was
+            // Systems_SimConstants.DEEP_SHOT_EVERY_N_PLAYS, which is where that
+            // tuning lives.
+            if (_isCarrier && _hasQuarterbackActions)
+            {
+                Systems_IPlayerHandle back = HandoffTarget();
+
+                if (back != null)
+                {
+                    return back.Position;
+                }
+            }
+
+            if (_isCarrier)
+            {
+                // THE CARRIER JUKES, BUT HE IS NOT UNCATCHABLE. This used to be a
+                // binary: any opponent within six metres vertically produced a full
+                // eight-metre sidestep directly away from him, recomputed every
+                // decision. That is a perfect evasion policy against the nearest
+                // defender — it never mistimes, never commits the wrong way, and
+                // flips instantly the moment someone else becomes nearest. Measured
+                // at 11.2 yards per play with one fourth down in an entire game.
+                //
+                // Now the cut is PROPORTIONAL to how close the man actually is and
+                // half the size, so a defender who has the angle can still close it
+                // off. A back running free in space is barely deflected; one with a
+                // defender on his hip cuts hard.
+                Systems_IPlayerHandle chaser = NearestOpponent();
+                float lateral = 0f;
+
+                if (chaser != null)
+                {
+                    float distance = Vector2.Distance(position, chaser.Position);
+                    float closeness =
+                        1f - Mathf.Clamp01(distance / Systems_SimConstants.EVASION_RANGE);
+
+                    lateral = (position.x < chaser.Position.x ? -1f : 1f)
+                        * Systems_SimConstants.EVASION_LATERAL * closeness;
+                }
+
+                // At the goal line HIS side attacks: +Y for the offense of the snap,
+                // -Y for a defender returning a pick or a kick (revision 14).
+                return new Vector2(
+                    Mathf.Clamp(
+                        position.x + lateral,
+                        -Systems_FieldModel.HALF_WIDTH,
+                        Systems_FieldModel.HALF_WIDTH),
+                    Systems_FieldModel.GoalLineYOf(_side));
+            }
+
+            // THE BALL IS THE OTHER SIDE'S: chase it. The defense of the snap has its
+            // assignments for that; the offense chasing a returner simply runs him
+            // down.
+            Systems_IPlayerHandle holder = CurrentCarrier();
+
+            if (holder != null && holder.Side != _side && _side == Systems_TeamSide.Offense)
+            {
+                return InterceptOf(holder);
+            }
+
+            // THE BALL IS OURS AND WE ARE THE DEFENSE OF THE SNAP: a return. Get in
+            // front of whoever is chasing it.
+            if (holder != null && holder.Side == _side && _side == Systems_TeamSide.Defense)
+            {
+                return ReturnBlockTarget(position, holder);
+            }
+
+            if (_side == Systems_TeamSide.Defense)
+            {
+                return DefensiveTarget(position);
+            }
+
+            // Blockers stand BETWEEN the rusher and the ball rather than driving at
+            // the rusher itself.
+            //
+            // Driving at him meant arriving where he had just been and shoving from
+            // behind, which a rusher running past simply leaves. Taking the inside
+            // position puts the blocker's body in the path to the quarterback, which
+            // is the whole job — and it is the same thing Reward_Role.Block already
+            // measures, so the scripted line and the reward finally want the same
+            // thing instead of two different ones.
+            // THE HUMAN'S PASS TO A SPOT (the QB challenge's double tap): it was
+            // thrown at grass, not at a man, so every eligible team-mate in reach of
+            // where it comes down breaks for it, as a receiver does for a ball in
+            // the air. Whoever is under it first catches it.
+            if (_side == Systems_TeamSide.Offense && !_isBlocker && !_hasQuarterbackActions
+                && IsInReachOfLandingSpot(position))
+            {
+                return _ball.LandingSpot;
+            }
+
+            // A designed play (the QB challenge): every eligible team-mate of the
+            // human runs the card's job until the ball is caught or handed off.
+            if (_side == Systems_TeamSide.Offense && !_isBlocker && !_play.Design.IsNone
+                && !_hasQuarterbackActions && IsBallStillInTheBackfield())
+            {
+                return DesignedTarget(position);
+            }
+
+            if (_isBlocker)
+            {
+                return BlockTarget(position);
+            }
+
+            // Backs clear the quarterback's retreat lane while the call is still
+            // open. All three start on x = 0 — quarterback at -2.5, fullback at
+            // -4.5, halfback at -6.5 — so a seven-yard dropback reverses straight
+            // through both of them. Slot parity splits them opposite ways, which is
+            // also what a back does on a pass: release to the flat.
+            if (_isBack && !_play.CallIsLatched)
+            {
+                float lane = (_formationSlotIndex % 2 == 0) ? -1f : 1f;
+                return new Vector2(
+                    lane * Systems_SimConstants.POCKET_LANE_X, position.y);
+            }
+
+            // THE OTHER HALF OF THE MESH. The designated back closes on the
+            // quarterback rather than running upfield away from him.
+            //
+            // Without this the fix above only halves the problem: a quarterback
+            // chasing a back who is running away at the same top speed never gains a
+            // metre, so the pair would cross HANDOFF_RADIUS only if the back happened
+            // to be turning. Both sides closing makes the mesh deterministic — it
+            // completes within a few ticks of the call latching, every time.
+            //
+            // It ends the moment the ball changes hands: _isCarrier is then true for
+            // this player and the carrier branch above has already returned.
+            if (_isBack && IsDesignatedBallCarrierOnHandoff())
+            {
+                Systems_IPlayerHandle quarterback =
+                    _registry == null
+                        ? null
+                        : _registry.Get(Systems_Formation.QUARTERBACK_SLOT_INDEX);
+
+                if (quarterback != null)
+                {
+                    return quarterback.Position;
+                }
+            }
+
+            // Receivers and backs run upfield and spread. Slot index parity fans
+            // them left and right so they do not all occupy the same lane.
+            float split = (_formationSlotIndex % 2 == 0) ? -1f : 1f;
+
+            return new Vector2(
+                Mathf.Clamp(
+                    position.x + (split * 10f),
+                    -Systems_FieldModel.HALF_WIDTH,
+                    Systems_FieldModel.HALF_WIDTH),
+                Systems_FieldModel.ATTACKING_GOAL_LINE_Y);
+        }
+
+        /// <summary>
+        /// Blockers stand BETWEEN the rusher and the ball rather than driving at
+        /// the rusher itself — see TargetPoint. Shared by the five linemen and, on
+        /// a designed play, by anyone whose job is Block.
+        /// </summary>
+        private Vector2 BlockTarget(Vector2 position)
+        {
+            Systems_IPlayerHandle opponent = NearestOpponent();
+            if (opponent == null)
+            {
+                return new Vector2(position.x, position.y + 4f);
+            }
+
+            // RUN BLOCKING: FIRE OUT, THEN DRIVE (2026-10-16). Every snap was
+            // pass protection — stand on the rusher's line to the ball — and on
+            // a run the ball is a back six metres deep, so the whole line gave
+            // ground toward him: sampled on the merged build, the defensive
+            // front drove it from a metre behind the line to nearly five in
+            // 1.2 s, and the handoff was taken inside the collapse. Every
+            // snap now starts with the line coming off the ball into the man
+            // in front, aiming past him upfield; a run keeps driving, and only
+            // a called pass sets up to protect.
+            // The EFFECTIVE call (Systems_PlayModel.EffectiveCall): the latched
+            // one, or a human quarterback's designed play before he commits —
+            // identical to the old test for every scripted snap.
+            Systems_PlayCall call = _play.EffectiveCall;
+
+            if (call == Systems_PlayCall.None || IsRunCall(call))
+            {
+                return opponent.Position + new Vector2(0f, RUN_BLOCK_DRIVE_METRES);
+            }
+
+            Vector2 anchor = _ball == null ? position : _ball.Position;
+            Vector2 rusherToAnchor = anchor - opponent.Position;
+
+            // Degenerate only if a rusher is standing exactly on the ball, in
+            // which case there is no line to take and meeting him is correct.
+            if (rusherToAnchor.sqrMagnitude < 0.0001f)
+            {
+                return opponent.Position;
+            }
+
+            return opponent.Position
+                + (rusherToAnchor.normalized * Systems_SimConstants.BLOCK_CUSHION);
+        }
+
+        /// <summary>
+        /// True while a designed play is still being run as designed: the
+        /// quarterback has the ball, or has thrown it and it is in the air.
+        /// </summary>
+        private bool IsBallStillInTheBackfield()
+        {
+            if (_ball == null)
+            {
+                return false;
+            }
+
+            if (_ball.IsHeld)
+            {
+                return _ball.CarrierId == Systems_Formation.QUARTERBACK_SLOT_INDEX;
+            }
+
+            return _ball.IsInFlight && _ball.PassKind != Systems_PassKind.Lateral;
+        }
+
+        /// <summary>
+        /// A pass to a spot is in the air and this player could get under it: no
+        /// further from where it comes down than he can run in the flight left, at
+        /// his top speed, plus the catch radius. Players out of reach keep doing
+        /// what they were.
+        /// </summary>
+        private bool IsInReachOfLandingSpot(Vector2 position)
+        {
+            if (_ball == null || !_ball.HasLandingSpot)
+            {
+                return false;
+            }
+
+            float secondsLeft = Mathf.Max(0, _ball.LandingTicks - _ball.FlightTicks) * Time.fixedDeltaTime;
+            float reach = (secondsLeft * _topSpeed) + Systems_SimConstants.CATCH_RADIUS;
+
+            return (_ball.LandingSpot - position).sqrMagnitude <= reach * reach;
+        }
+
+        /// <summary>
+        /// This player's job on the human quarterback's card (Systems_PlayDesign).
+        /// A back the human has handed off to closes on him first, whatever the
+        /// card said — the handoff completes on proximity (Systems_BallSystem
+        /// .TryHandoff), so the back has to come for it.
+        /// </summary>
+        private Vector2 DesignedTarget(Vector2 position)
+        {
+            if (_routeEpisode != _play.EpisodeIndex)
+            {
+                _routeEpisode = _play.EpisodeIndex;
+                _routeStart = position;
+                _routeLegComplete = false;
+            }
+
+            Systems_IPlayerHandle quarterback = _registry == null
+                ? null
+                : _registry.Get(Systems_Formation.QUARTERBACK_SLOT_INDEX);
+
+            if (_isBack && quarterback != null && IsDesignatedBallCarrierOnHandoff())
+            {
+                return quarterback.Position;
+            }
+
+            Systems_Route route = _play.Design.RouteOf(_formationSlotIndex);
+
+            if (route == Systems_Route.Handoff)
+            {
+                // Coming for the ball until the quarterback commits elsewhere: once
+                // a call has latched that is not this back's handoff, he blocks.
+                if (!_play.CallIsLatched && quarterback != null)
+                {
+                    return quarterback.Position;
+                }
+
+                route = Systems_Route.Block;
+            }
+
+            if (route == Systems_Route.Block)
+            {
+                return BlockTarget(position);
+            }
+
+            Vector2 target = Systems_RouteBook.TargetFor(
+                route, _routeStart, _play.LineOfScrimmageY, position,
+                ref _routeLegComplete, out float settleRadius);
+
+            _settleRadius = settleRadius;
+            return target;
+        }
+
+        /// <summary>
+        /// Whether the human is steering this player right now
+        /// (Systems_HumanControlModel.IsControlling).
+        /// </summary>
+        private bool IsHumanControlled()
+        {
+            return _humanControl != null
+                && _play != null
+                && _humanControl.IsControlling(
+                    _side == Systems_TeamSide.Offense,
+                    _isCarrier,
+                    _play.Phase == Systems_PlayPhase.Live);
+        }
+
+        /// <summary>
+        /// The human's player: run to the spot he tapped, act on a team-mate he
+        /// tapped, throw to a spot he double-tapped. Written into the same action
+        /// buffer a brain or the script would fill, so the mask's predicates and
+        /// the handlers judge it exactly as they judge them (Agent_ActionLegality).
+        /// </summary>
+        private void HumanControl(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions)
+        {
+            Vector2 command = _humanControl.CommandToward(Position, Velocity, _formationSlotIndex);
+            Vector2 up = Facing;
+            Vector2 left = new Vector2(-up.y, up.x);
+
+            continuousActions[0] = Vector2.Dot(command, up);
+            continuousActions[1] = Vector2.Dot(command, left);
+
+            int targetSlot = _humanControl.TakeAction();
+            Systems_IPlayerHandle mate =
+                targetSlot >= 0 && _registry != null ? _registry.Get(targetSlot) : null;
+
+            if (!_hasQuarterbackActions)
+            {
+                // Anyone but the quarterback: a tap on a team-mate level with
+                // him or behind is a pitch (to the nearest such man, the branch's
+                // only target).
+                if (mate != null
+                    && mate.Position.y - Position.y <= Systems_SimConstants.LATERAL_LEVEL_TOLERANCE)
+                {
+                    discreteActions[LATERAL_BRANCH] = LATERAL_PITCH;
+                }
+
+                return;
+            }
+
+            if (_humanControl.TakePass(out Vector2 spot))
+            {
+                HumanPassToSpot(continuousActions, discreteActions, spot);
+                return;
+            }
+
+            HumanQuarterback(continuousActions, discreteActions, mate);
+        }
+
+        /// <summary>
+        /// The double tap: a forward pass to the spot, if a run has not already
+        /// been committed to. The ball system brings it down there
+        /// (Systems_BallSystem.Throw); the aim here only has to point at it. A
+        /// spot inside MIN_CATCH_DISTANCE could never be caught by anybody and is
+        /// a tap on his own feet, not a throw.
+        /// </summary>
+        private void HumanPassToSpot(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions,
+            Vector2 spot)
+        {
+            Vector2 toSpot = spot - Position;
+
+            // Agent_ActionLegality.CanReleasePass's rules that hold before the call
+            // latches, checked first so a refused throw leaves no spot behind for
+            // the ball system to find on a later one.
+            if (toSpot.magnitude < Systems_SimConstants.MIN_CATCH_DISTANCE
+                || _play.ForwardPassThrown
+                || _play.PhysicsTick > Systems_SimConstants.THROW_WINDOW_TICKS
+                || Position.y > _play.LineOfScrimmageY)
+            {
+                return;
+            }
+
+            bool latched = _play.CallIsLatched;
+
+            if (latched && !_play.Call.IsPass())
+            {
+                return;
+            }
+
+            if (!latched)
+            {
+                discreteActions[PLAY_CALL_BRANCH] = _play.Design.IsPass
+                    ? (int)_play.Design.Call
+                    : (int)Systems_PlayCall.Pass;
+            }
+
+            _humanControl.NoteIntendedSpot(spot);
+
+            Vector2 aim = toSpot.normalized;
+            discreteActions[THROW_BRANCH] = THROW_RELEASE;
+            continuousActions[2] = aim.x;
+            continuousActions[3] = aim.y;
+        }
+
+        /// <summary>
+        /// The quarterback's tap on a team-mate beside or behind him (the QB
+        /// challenge system sends no other): a back within reach is a handoff,
+        /// anyone else a pitch. Nothing tapped and over the line of scrimmage with
+        /// no call is a keeper. Each latches its call on the spot
+        /// (HandleQuarterback). Passes are double taps, HumanPassToSpot.
+        /// </summary>
+        private void HumanQuarterback(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions,
+            Systems_IPlayerHandle mate)
+        {
+            bool latched = _play.CallIsLatched;
+
+            if (mate == null)
+            {
+                if (!latched && _play.Kind.HasLiveCall() && Position.y > _play.LineOfScrimmageY)
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = (int)Systems_PlayCall.KeepQuarterback;
+                }
+
+                return;
+            }
+
+            Vector2 offset = mate.Position - Position;
+            bool levelOrBehind = offset.y <= Systems_SimConstants.LATERAL_LEVEL_TOLERANCE;
+
+            if (levelOrBehind)
+            {
+                bool isBack = mate.Id == Systems_FormationBook.FULLBACK_SLOT_INDEX
+                    || mate.Id == Systems_FormationBook.HALFBACK_SLOT_INDEX;
+
+                if (!latched && isBack
+                    && offset.magnitude <= Systems_SimConstants.HANDOFF_RADIUS + HUMAN_HANDOFF_REACH_METRES)
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = mate.Id == Systems_FormationBook.FULLBACK_SLOT_INDEX
+                        ? (int)Systems_PlayCall.HandoffFullback
+                        : (int)Systems_PlayCall.HandoffHalfback;
+                    return;
+                }
+
+                // A pitch. With a pass already called the release would be a
+                // forward pass thrown backwards — refused rather than wasted.
+                if (latched && _play.Call.IsPass())
+                {
+                    return;
+                }
+
+                if (!latched)
+                {
+                    discreteActions[PLAY_CALL_BRANCH] = (int)Systems_PlayCall.KeepQuarterback;
+                }
+
+                Vector2 pitch = offset.sqrMagnitude > 0.0001f ? offset.normalized : Vector2.down;
+                discreteActions[THROW_BRANCH] = THROW_RELEASE;
+                continuousActions[2] = pitch.x;
+                continuousActions[3] = pitch.y;
+            }
+        }
+
+        /// <summary>
+        /// The back this play's call hands off to, or null when the call is not a
+        /// handoff, has not latched yet, or the ball has already changed hands.
+        ///
+        /// The slot comes from Systems_Formation.HandoffSlotOf, which
+        /// Systems_BallSystem.TryHandoff reads too: one decides where the
+        /// quarterback runs, the other whether arriving there completes the handoff,
+        /// so they must never disagree.
+        /// </summary>
+        private Systems_IPlayerHandle HandoffTarget()
+        {
+            int slot = HandoffTargetSlot();
+
+            if (slot < 0 || _registry == null)
+            {
+                return null;
+            }
+
+            return _registry.Get(slot);
+        }
+
+        private int HandoffTargetSlot()
+        {
+            if (_play == null || !_play.CallIsLatched)
+            {
+                return -1;
+            }
+
+            return Systems_Formation.HandoffSlotOf(_play.Call);
+        }
+
+        /// <summary>
+        /// True when THIS player is the back the latched handoff is going to and the
+        /// quarterback is still holding the ball.
+        /// </summary>
+        private bool IsDesignatedBallCarrierOnHandoff()
+        {
+            if (_ball == null || !_ball.IsHeld)
+            {
+                return false;
+            }
+
+            // Already ours, or already someone else's — either way there is no mesh
+            // left to run.
+            if (_ball.CarrierId != Systems_Formation.QUARTERBACK_SLOT_INDEX)
+            {
+                return false;
+            }
+
+            return HandoffTargetSlot() == _formationSlotIndex;
+        }
+
+        /// <summary>
+        /// Whether the quarterback is still a passer rather than a runner: either it
+        /// has not committed to anything yet, or it has called a pass and the throw
+        /// window is still open.
+        ///
+        /// A handoff drops out of here the moment it latches, which is correct — on
+        /// a handoff the quarterback's job is to close on the back, and
+        /// Systems_BallSystem.TryHandoff completes on proximity alone. That closing
+        /// is TargetPoint's mesh branch; until it was written this comment described
+        /// behaviour that did not exist and the quarterback ran at the goal line
+        /// holding the ball instead.
+        /// </summary>
+        private bool IsHoldingThePocket()
+        {
+            if (!_play.CallIsLatched)
+            {
+                return true;
+            }
+
+            return _play.Call.IsPass()
+                && _play.PhysicsTick <= Systems_SimConstants.THROW_WINDOW_TICKS;
+        }
+
+        /// <summary>
+        /// Where a defender wants to be.
+        ///
+        /// THIS USED TO BE ONE LINE — every defender, every tick, targeted the ball.
+        /// That produced eleven bodies converging on the quarterback the instant the
+        /// ball was snapped: no coverage, no leverage, nothing between a receiver and
+        /// the end zone. The 4-3 with two-high safeties that Systems_Formation lines
+        /// up was cosmetic, dissolving into a swarm before anyone had run a step, and
+        /// the two split receivers were uncovered about a second after every snap.
+        ///
+        /// The structure below is Cover 1 and it is only three ideas deep:
+        ///
+        ///   THE BALL IN THE AIR OVERRIDES EVERYTHING. Assignments exist to stop the
+        ///   ball being caught; once it is thrown, the ball IS the assignment. This
+        ///   is also what keeps a pass contested rather than a free completion, which
+        ///   is the property Systems_BallSystem.FindCatcher depends on to make
+        ///   coverage worth learning at all.
+        ///
+        ///   SO DOES A BALL PAST THE LINE. A carrier who has crossed the line of
+        ///   scrimmage has beaten the call; holding a zone behind him is how a five
+        ///   yard gain becomes sixty. Everyone chases.
+        ///
+        ///   OTHERWISE, PLAY YOUR JOB. Linemen rush, linebackers hold a zone,
+        ///   corners and the strong safety play their man, the free safety plays the
+        ///   deep middle.
+        ///
+        /// None of this is reachable by a trained policy — it is the heuristic only.
+        /// A brain sees the same observations it always did and is free to invent
+        /// something better.
+        /// </summary>
+        private Vector2 DefensiveTarget(Vector2 position)
+        {
+            if (_ball == null || _play == null)
+            {
+                return position;
+            }
+
+            // A PASS IN THE AIR: GO TO WHERE IT IS GOING (2026-10-16). Every defender
+            // used to steer at the ball's current position, which on a long throw
+            // is behind the catch for its whole flight: eleven men converged on
+            // where the ball had been, arrived after the receiver had it, and in a
+            // measured game fourteen of thirty-seven passes went for touchdowns.
+            // The same intercept every defender already runs at a carrier, solved
+            // against the ball's velocity, puts them on its path instead.
+            if (_ball.IsInFlight)
+            {
+                // A pass to a spot can only be caught as it comes down, so a
+                // defender in reach goes to where it lands — once he has read it.
+                // Breaking for the spot the tick it left the hand, every defender
+                // was at the catch with the receiver: four catches of a played game
+                // (2026-10-23) went for 4.5, 0.3, 0.0 and -2.7 yards.
+                return _ball.FlightTicks >= DEFENDER_READ_TICKS && IsInReachOfLandingSpot(position)
+                    ? _ball.LandingSpot
+                    : InterceptPoint(_ball.Position, _ball.Velocity);
+            }
+
+            Systems_IPlayerHandle carrier = CurrentCarrier();
+
+            if (carrier == null)
+            {
+                return _ball.Position;
+            }
+
+            if (carrier.Position.y > _play.LineOfScrimmageY)
+            {
+                return InterceptOf(carrier);
+            }
+
+            switch (_role)
+            {
+                case Systems_PlayerRole.DefensiveLine:
+                    return InterceptOf(carrier);
+
+                // The two branches that return a SPOT rather than a body. Both ease
+                // in rather than charging — see ZONE_SETTLE_RADIUS.
+                case Systems_PlayerRole.Linebacker:
+                    _settleRadius = ZONE_SETTLE_RADIUS;
+                    return LinebackerZone(carrier);
+
+                case Systems_PlayerRole.Cornerback:
+                case Systems_PlayerRole.Safety:
+                    _settleRadius = ZONE_SETTLE_RADIUS;
+                    return CoverageSpot(carrier);
+
+                default:
+                    return InterceptOf(carrier);
+            }
+        }
+
+        /// <summary>
+        /// Where to run to actually MEET the carrier, rather than where he is now.
+        ///
+        /// PURE PURSUIT CANNOT CATCH ANYBODY. Steering at a runner's current
+        /// position means arriving where he has just been, so a defender only ever
+        /// closes if he is strictly faster — and Systems_RoleTable gives a corner
+        /// and a receiver the same 9.3 m/s, a linebacker and a back within a whisker
+        /// of each other. Once a carrier cleared the line he was, in practice,
+        /// uncatchable: a 40-play sample came back with eleven touchdowns and six
+        /// plays that hit the clock with nobody having laid a hand on him.
+        ///
+        /// This is the same mistake the blocker branch above already documents —
+        /// "driving at him meant arriving where he had just been" — and the same
+        /// fix. Solving for the intercept lets equal speed be enough, because the
+        /// defender cuts the angle instead of running the same path a step behind.
+        ///
+        /// Three Newton iterations, exactly as LeadAim does for a throw: the flight
+        /// time depends on the distance, which depends on the lead. It converges
+        /// immediately at these speeds and needs no closed form.
+        /// </summary>
+        private Vector2 InterceptOf(Systems_IPlayerHandle carrier)
+        {
+            return InterceptPoint(carrier.Position, carrier.Velocity);
+        }
+
+        /// <summary>
+        /// Where to run to meet something moving at <paramref name="velocity"/> from
+        /// <paramref name="from"/>: a carrier, or a ball in the air.
+        /// </summary>
+        private Vector2 InterceptPoint(Vector2 from, Vector2 velocity)
+        {
+            float speed = _topSpeed;
+
+            if (speed <= 0.01f)
+            {
+                return from;
+            }
+
+            Vector2 origin = Position;
+            Vector2 carrierPosition = from;
+            Vector2 carrierVelocity = velocity;
+
+            Vector2 aim = carrierPosition;
+
+            for (int iteration = 0; iteration < 3; iteration++)
+            {
+                float seconds = (aim - origin).magnitude / speed;
+
+                // Capped so a runner who is briefly faster cannot throw the solution
+                // out to the far end of the field, which would turn a pursuit into a
+                // sprint at the end zone and give up the angle entirely.
+                seconds = Mathf.Min(seconds, MAX_PURSUIT_LEAD_SECONDS);
+
+                aim = carrierPosition + (carrierVelocity * seconds);
+            }
+
+            return aim;
+        }
+
+        /// <summary>
+        /// The ball's carrier, or null while it is in the air. Read straight from
+        /// the ball model rather than through Systems_Referee so this works for an
+        /// agent that was never injected with one.
+        /// </summary>
+        private Systems_IPlayerHandle CurrentCarrier()
+        {
+            if (_ball == null || !_ball.IsHeld || _registry == null)
+            {
+                return null;
+            }
+
+            return _registry.Get(_ball.CarrierId);
+        }
+
+        /// <summary>
+        /// A linebacker's spot: its own alignment, dropped to a fixed depth beyond
+        /// the line and leaning part of the way toward the ball.
+        ///
+        /// Anchored on the FORMATION x, not on the linebacker's current x. Leaning
+        /// from where it already stands compounds every tick — each step closes a
+        /// fraction of a gap that is then measured again from the new position — so
+        /// the zone walks itself onto the quarterback within a second and the
+        /// linebacker has silently become a fourth rusher.
+        /// </summary>
+        private Vector2 LinebackerZone(Systems_IPlayerHandle carrier)
+        {
+            float anchorX = Formations.GetSlot(_formationSlotIndex).OffsetX;
+
+            float x = anchorX
+                + ((carrier.Position.x - anchorX) * Systems_SimConstants.ZONE_BALL_LEAN);
+
+            float y = _play.LineOfScrimmageY
+                + (Systems_SimConstants.LINEBACKER_DROP_YARDS * Systems_FieldModel.YARD);
+
+            return new Vector2(
+                Mathf.Clamp(x, -Systems_FieldModel.HALF_WIDTH, Systems_FieldModel.HALF_WIDTH),
+                y);
+        }
+
+        /// <summary>
+        /// A cover defender's spot: goalside of the receiver it was assigned, or the
+        /// deep middle if it was assigned nobody.
+        /// </summary>
+        private Vector2 CoverageSpot(Systems_IPlayerHandle carrier)
+        {
+            int assignedSlot = Formations.CoverageAssignmentFor(_formationSlotIndex);
+
+            Systems_IPlayerHandle receiver = assignedSlot < 0 || _registry == null
+                ? null
+                : _registry.Get(assignedSlot);
+
+            if (receiver == null)
+            {
+                // The free safety. Deep middle, leaning slightly to the ball, so
+                // nothing gets behind the coverage down either seam.
+                float deepY = _play.LineOfScrimmageY
+                    + (Systems_SimConstants.SAFETY_DEPTH_YARDS * Systems_FieldModel.YARD);
+
+                return new Vector2(
+                    carrier.Position.x * Systems_SimConstants.ZONE_BALL_LEAN, deepY);
+            }
+
+            // Between the receiver and the end zone it is running at — see
+            // Systems_SimConstants.COVERAGE_CUSHION for why not on top of it.
+            return new Vector2(
+                receiver.Position.x,
+                receiver.Position.y + Systems_SimConstants.COVERAGE_CUSHION);
+        }
+
+        /// <summary>
+        /// Turns a world-space destination into a velocity command: toward it, at
+        /// full speed, in the body's frame (revision 17).
+        ///
+        /// The turning is Agent_VelocityController's now — it used to be here, nine
+        /// lines that scaled drive by alignment so a player turning around rotated on
+        /// the spot instead of driving off. The scripted players keep it by asking
+        /// for a direction like everybody else, and a zone defender easing onto his
+        /// spot asks for less than BACKPEDAL_SPEED_FRACTION, so one settling onto a
+        /// spot behind him backpedals into it, which is what a zone drop is.
+        /// </summary>
+        private void Steer(ActionSegment<float> continuousActions, Vector2 target)
+        {
+            Vector2 toTarget = target - Position;
+
+            if (toTarget.sqrMagnitude < 0.0001f)
+            {
+                return;
+            }
+
+            float throttle = 1f;
+
+            // Ease off approaching a spot that is not going anywhere, so the body
+            // settles onto it instead of oscillating across it.
+            if (_settleRadius > 0f)
+            {
+                throttle = Mathf.Clamp01(toTarget.magnitude / _settleRadius);
+            }
+
+            Vector2 up = Facing;
+            Vector2 left = new Vector2(-up.y, up.x);
+            Vector2 command = toTarget.normalized * throttle;
+
+            continuousActions[0] = Vector2.Dot(command, up);
+            continuousActions[1] = Vector2.Dot(command, left);
+        }
+
+        /// <summary>
+        /// The quarterback's call and, on a pass, the throw.
+        ///
+        /// The call is chosen from field position rather than at random so a
+        /// playthrough shows the whole playbook without being unwatchably erratic:
+        /// throw from deep, run when close. Slot parity picks between the two
+        /// handoffs, which is enough to keep both in the sample.
+        /// </summary>
+        private void HeuristicQuarterback(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions)
+        {
+            // A kick, a kneel, a spike: the quarterback is a kicker or a clock, and
+            // throws nothing.
+            if (!_play.Kind.HasLiveCall())
+            {
+                return;
+            }
+
+            if (!_play.CallIsLatched)
+            {
+                discreteActions[0] = (int)PlannedCall();
+                return;
+            }
+
+            if (_play.Call == Systems_PlayCall.KeepQuarterback)
+            {
+                HeuristicOption(continuousActions, discreteActions);
+                return;
+            }
+
+            if (!_play.Call.IsPass() || !CanReleasePass())
+            {
+                return;
+            }
+
+            // Hold the ball a moment so the routes develop, then release inside the
+            // window OnActionReceived enforces. A deep shot holds longer, because a
+            // fifteen-yard route is still eight yards downfield at THROW_AT_TICK.
+            bool isDeepShot = _play.Call == Systems_PlayCall.PassDeep;
+
+            int releaseTick = isDeepShot
+                ? Systems_SimConstants.DEEP_SHOT_THROW_AT_TICK
+                : THROW_AT_TICK;
+
+            // Jitter the release so the same call does not unfold tick for tick the
+            // way it did last time. Drawn once per play rather than per tick — a
+            // fresh draw every step would re-roll until it passed and defeat itself.
+            releaseTick += ReleaseJitterForThisPlay();
+
+            if (_play.PhysicsTick < releaseTick
+                || _play.PhysicsTick > Systems_SimConstants.THROW_WINDOW_TICKS)
+            {
+                return;
+            }
+
+            // On a deep play, look downfield first and only settle for the ordinary
+            // read if nobody got open deep. Without the fallback a covered deep
+            // route would hold the ball until the window shut and turn every deep
+            // call into a scramble.
+            Systems_IPlayerHandle target = isDeepShot ? DeepReceiver() : null;
+
+            if (target == null)
+            {
+                target = MostOpenReceiver();
+            }
+
+            // NOBODY OPEN AND THE RUSH ON HIM (revision 14): from outside the
+            // tackle box he throws it away rather than take the sack. From inside
+            // it he throws to his read anyway — a throw at nobody from the pocket
+            // is intentional grounding.
+            bool covered = target == null || RoomOf(target) < COVERED_ROOM_METRES;
+
+            if (covered && IsUnderPressure()
+                && Mathf.Abs(Position.x) > Systems_SimConstants.TACKLE_BOX_HALF_WIDTH)
+            {
+                float sideline = Position.x >= 0f ? 1f : -1f;
+                Vector2 away = new Vector2(sideline, THROWAWAY_UPFIELD_SLOPE).normalized;
+
+                discreteActions[1] = 1;
+                continuousActions[2] = away.x;
+                continuousActions[3] = away.y;
+                return;
+            }
+
+            if (target == null)
+            {
+                return;
+            }
+
+            Vector2 aim = LeadAim(target);
+
+
+            discreteActions[1] = 1;
+            continuousActions[2] = aim.x;
+            continuousActions[3] = aim.y;
+        }
+
+        /// <summary>
+        /// Where to throw so that the ball and the receiver arrive together.
+        ///
+        /// THE PREVIOUS VERSION AIMED AT target.Position, AND THAT MADE MOST PASSES
+        /// UNCATCHABLE BY CONSTRUCTION. Systems_BallSystem flies the ball in a
+        /// straight line at a fixed speed and completes the catch only when someone
+        /// is within CATCH_RADIUS — 1.2 m — of it. A receiver twenty metres downfield
+        /// is most of a second of flight away and has run five or six metres in that
+        /// time, so the ball arrived four or five catch radii behind him. Every
+        /// throw at a moving target was a scripted incompletion, and no amount of
+        /// route running or coverage could change that.
+        ///
+        /// The fix is the standard intercept solve. Guess a flight time from the
+        /// present separation, walk the receiver along its own velocity by that
+        /// much, remeasure against the new point. It converges geometrically; three
+        /// passes is well under a centimetre for any throw this field allows, and it
+        /// allocates nothing.
+        ///
+        /// The release speed is read from the same constant Systems_BallSystem uses,
+        /// because HeuristicQuarterback hands it a unit-length aim and unit length
+        /// is full power. If either side of that is ever retuned the lead follows it
+        /// rather than quietly going stale.
+        /// </summary>
+        private Vector2 LeadAim(Systems_IPlayerHandle target)
+        {
+            Vector2 origin = Position;
+            Vector2 targetPosition = target.Position;
+            Vector2 targetVelocity = target.Velocity;
+
+            const float SPEED = Systems_SimConstants.PASS_SPEED_MAX;
+
+            Vector2 aimPoint = targetPosition;
+
+            for (int iteration = 0; iteration < 3; iteration++)
+            {
+                float flightSeconds = (aimPoint - origin).magnitude / SPEED;
+                aimPoint = targetPosition + (targetVelocity * flightSeconds);
+            }
+
+            Vector2 aim = aimPoint - origin;
+
+            // A receiver standing exactly on the quarterback has no direction to be
+            // led in; straight downfield is the same fallback Systems_BallSystem
+            // applies to a degenerate aim.
+            if (aim.sqrMagnitude < 1e-4f)
+            {
+                return Vector2.up;
+            }
+
+            // The exact lead, deliberately. The throw's error used to be added
+            // here; since revision 13 Systems_BallSystem.Throw applies it to the
+            // ball, for every quarterback (THROW_SCATTER_BASE_DEGREES).
+            return aim.normalized;
+        }
+
+        /// <summary>
+        /// This play's release-timing offset, drawn once and held for the play.
+        ///
+        /// HELD, NOT REDRAWN. HeuristicQuarterback runs every decision step, so a
+        /// fresh draw each tick would be re-rolled until one of them happened to
+        /// clear the threshold — which is not jitter, it is just the earliest tick
+        /// with a lucky draw, and the effect would collapse back to deterministic.
+        /// Keying the cached value on the episode index is what makes it one draw
+        /// per play.
+        /// </summary>
+        private int ReleaseJitterForThisPlay()
+        {
+            if (_releaseJitterEpisode != _play.EpisodeIndex)
+            {
+                _releaseJitterEpisode = _play.EpisodeIndex;
+
+                float unit = (NextHeuristicUnit() * 2f) - 1f;
+                _releaseJitterTicks = Mathf.RoundToInt(unit * THROW_RELEASE_JITTER_TICKS);
+            }
+
+            return _releaseJitterTicks;
+        }
+
+        /// <summary>
+        /// Charges the quarterback for repeating itself, and records the call in
+        /// the rolling window the charge is computed from.
+        ///
+        /// The window is this agent's own, deliberately: Agent_Telemetry keeps a
+        /// separate 200-play histogram for the Call/Entropy series, and the two
+        /// must not share state. That one is a measurement and has to stay a
+        /// faithful record of what happened; this one is part of the reward and
+        /// feeds back into what happens next. Wiring the reward to read the
+        /// telemetry would make the metric that detects a collapse a participant
+        /// in causing one.
+        /// </summary>
+        private void ChargeCallRepetition(Systems_PlayCall call)
+        {
+            int index = (int)call;
+
+            if (index < 0 || index >= _callCounts.Length)
+            {
+                return;
+            }
+
+            // Share BEFORE recording this call, so a quarterback is charged for the
+            // habit it already had rather than for the play it is about to run.
+            float charge = Reward_Call.Repetition(Reward_Call.ShareOf(_callCounts, call));
+
+            AddReward(charge);
+            _callRewardSum += charge;
+
+            // Fixed-size ring: evict the oldest, add the new one. No allocation.
+            if (_callWindowFilled == Systems_SimConstants.CALL_HISTORY_PLAYS)
+            {
+                _callCounts[(int)_callWindow[_callWindowCursor]]--;
+            }
+            else
+            {
+                _callWindowFilled++;
+            }
+
+            _callWindow[_callWindowCursor] = call;
+            _callCounts[index]++;
+            _callWindowCursor =
+                (_callWindowCursor + 1) % Systems_SimConstants.CALL_HISTORY_PLAYS;
+        }
+
+        /// <summary>
+        /// The heuristic's own RNG, seeded once from <see cref="Systems_EpisodeSeed"/>.
+        ///
+        /// WHY THE HEURISTIC IS STOCHASTIC AT ALL. Everything under it is
+        /// deterministic by design — fixed delta time, seeded spots, a fixed
+        /// formation — so a play call chosen by slot parity made the whole game
+        /// deterministic too. With no promoted brain the heuristic IS the policy, and
+        /// two sessions of SCN_GAME produced the same play tally to the digit and the
+        /// same final score. Variety has to enter through the policy, because that is
+        /// the only part of the loop that is allowed to be stochastic: a trained
+        /// quarterback samples from a distribution every down, and this is the
+        /// stand-in for one.
+        ///
+        /// THE SIMULATION STAYS REPRODUCIBLE. The seed comes from
+        /// Systems_EpisodeSeed, which Systems_GameLifetimeScope pins in Training and
+        /// varies per session in Game. A training run therefore replays call for
+        /// call, which UNITY_RULES section 2 asks for; a played game does not, which
+        /// is what makes it a game. The slot index is folded in so 22 players do not
+        /// draw the same stream.
+        ///
+        /// Unity.Mathematics.Random is a struct, so this costs no allocation on a
+        /// path that runs every decision step.
+        /// </summary>
+        private Unity.Mathematics.Random _heuristicRng;
+
+        /// <summary>
+        /// <see cref="NextHeuristicUnit"/> as a delegate, built once: passing the
+        /// method group would allocate a new Func on every snap.
+        /// </summary>
+        private System.Func<float> _nextHeuristicUnit;
+
+        private bool _heuristicRngReady;
+
+        private int _releaseJitterEpisode = -1;
+
+        private int _releaseJitterTicks;
+
+        private Unity.Mathematics.Random HeuristicRng
+        {
+            get
+            {
+                if (!_heuristicRngReady)
+                {
+                    // Zero is not a legal xorshift state, so the slot is folded in
+                    // with an odd multiplier and the whole thing is forced non-zero.
+                    uint seed = Systems_EpisodeSeed.Value
+                        + ((uint)(_formationSlotIndex + 1) * 2654435761u);
+
+                    _heuristicRng = new Unity.Mathematics.Random(seed == 0u ? 1u : seed);
+                    _heuristicRngReady = true;
+                }
+
+                return _heuristicRng;
+            }
+        }
+
+        /// <summary>Draws once and writes the advanced state back.</summary>
+        private float NextHeuristicUnit()
+        {
+            Unity.Mathematics.Random rng = HeuristicRng;
+            float value = rng.NextFloat();
+            _heuristicRng = rng;
+            return value;
+        }
+
+        /// <summary>
+        /// The pre-snap kick-or-go, from <see cref="Agent_PlayCaller.ChooseKick"/>.
+        /// None means "go for it".
+        /// </summary>
+        private Systems_PlayCall ChooseKickCall()
+        {
+            float yardsToGoal = Systems_FieldModel.YardsToAttackingGoal(_play.LineOfScrimmageY);
+
+            return Agent_PlayCaller.ChooseKick(
+                _play.Down, _play.YardsToGo, yardsToGoal, IsInFieldGoalRange());
+        }
+
+        /// <summary>
+        /// This snap's scripted call, drawn on first asking and then held. It used
+        /// to be redrawn every decision until the latch took whichever came up at
+        /// DROPBACK_TICKS, so nothing before the latch could act on it.
+        /// </summary>
+        private Systems_PlayCall PlannedCall()
+        {
+            if (_plannedCallEpisode != _play.EpisodeIndex)
+            {
+                _plannedCallEpisode = _play.EpisodeIndex;
+                _plannedCall = ChooseCall();
+            }
+
+            return _plannedCall;
+        }
+
+        private static bool IsRunCall(Systems_PlayCall call)
+        {
+            return call == Systems_PlayCall.HandoffFullback
+                || call == Systems_PlayCall.HandoffHalfback
+                || call == Systems_PlayCall.KeepQuarterback;
+        }
+
+        /// <summary>
+        /// Delegates to <see cref="Agent_PlayCaller"/>, which owns the judgement.
+        /// This method's whole job is turning agent state into the four numbers it
+        /// takes, and handing over the seeded draw so the policy stays reproducible
+        /// without owning an RNG of its own.
+        /// </summary>
+        private Systems_PlayCall ChooseCall()
+        {
+            float yardsToGoal = Systems_FieldModel.YardsToAttackingGoal(Position.y);
+
+            _nextHeuristicUnit ??= NextHeuristicUnit;
+
+            Systems_PlayCall call = Agent_PlayCaller.Choose(
+                _play.Down,
+                _play.YardsToGo,
+                yardsToGoal,
+                IsInFieldGoalRange(),
+                _nextHeuristicUnit);
+
+            // The deep shot is a call of its own since revision 14. Made here, on
+            // the same plays IsDeepShotPlay always picked, so the scripted offense
+            // throws deep exactly as often as it did when "deep" was something the
+            // quarterback decided after calling Pass.
+            // The run-fit drill offers no pass; the scripted caller hands off instead.
+            if (_play.RunsOnly && call.IsPass())
+            {
+                return Systems_PlayCall.HandoffHalfback;
+            }
+
+            return call == Systems_PlayCall.Pass && IsDeepShotPlay()
+                ? Systems_PlayCall.PassDeep
+                : call;
+        }
+
+        /// <summary>
+        /// Whether this play is one of the scripted deep shots.
+        ///
+        /// Driven off the episode index rather than a random draw: execution here is
+        /// deterministic, so the same seed has to produce the same call every time.
+        /// </summary>
+        private bool IsDeepShotPlay()
+        {
+            return _play != null
+                && Systems_SimConstants.DEEP_SHOT_EVERY_N_PLAYS > 0
+                && (_play.EpisodeIndex % Systems_SimConstants.DEEP_SHOT_EVERY_N_PLAYS) == 0;
+        }
+
+        /// <summary>
+        /// The best target at least DEEP_SHOT_MIN_YARDS past the line of scrimmage,
+        /// or null if nobody is that deep with room to catch it.
+        ///
+        /// WHY THIS IS SEPARATE FROM MostOpenReceiver. That method ranks on
+        /// separation alone, and separation is exactly what a deep receiver does not
+        /// have — there is a safety over the top by design, while a back released
+        /// into the flat has the whole field to himself. So the most open receiver
+        /// was the shortest one on every single snap, the ball never travelled, and
+        /// the defense never had to respect anything behind it.
+        ///
+        /// The depth gate is measured from the line of scrimmage, not from the
+        /// quarterback, because the quarterback has retreated DROPBACK_DEPTH_YARDS by
+        /// the time it throws — measuring from where it stands would count the seven
+        /// yards of its own dropback as route depth and call a flat route deep.
+        /// </summary>
+        private Systems_IPlayerHandle DeepReceiver()
+        {
+            if (_registry == null || _play == null)
+            {
+                return null;
+            }
+
+            float depthGate = _play.LineOfScrimmageY
+                + (Systems_SimConstants.DEEP_SHOT_MIN_YARDS * Systems_FieldModel.YARD);
+
+            float roomGate = Systems_SimConstants.DEEP_SHOT_MIN_ROOM
+                * Systems_SimConstants.DEEP_SHOT_MIN_ROOM;
+
+            Systems_IPlayerHandle best = null;
+            float bestRoom = -1f;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle candidate = _registry.Get(slotIndex);
+
+                if (candidate == null
+                    || candidate.Side != Systems_TeamSide.Offense
+                    || candidate.Id == Id
+                    || !candidate.Role.IsEligibleReceiver()
+                    || candidate.Position.y < depthGate)
+                {
+                    continue;
+                }
+
+                float room = RoomSquared(candidate.Position);
+
+                if (room < roomGate)
+                {
+                    continue;
+                }
+
+                if (room > bestRoom)
+                {
+                    bestRoom = room;
+                    best = candidate;
+                }
+            }
+
+            if (best == null)
+            {
+                return null;
+            }
+
+            return PickFromReads(bestRoom, best);
+        }
+
+        /// <summary>
+        /// Chooses among the receivers who are comparably open, rather than always
+        /// the single most open one.
+        ///
+        /// WHY NOT JUST TAKE THE BEST. MostOpenReceiver ranks by separation and the
+        /// ranking is deterministic, so on a given play the same man came open by
+        /// the same margin and got the ball every single time. Watching it, the
+        /// offense looked like it was running one play on a loop. A quarterback does
+        /// not solve a maximum either — he works a progression and throws to a man
+        /// who is open, which on most snaps is more than one of them.
+        ///
+        /// ACCEPTABLE_READ_SHARE is applied to SQUARED separation, so 0.5 here is
+        /// about 71% of the best actual separation. Anyone that open is a live read;
+        /// anyone tighter than that is genuinely covered and stays out of it, which
+        /// keeps this from degenerating into throwing at random.
+        ///
+        /// Reservoir sampling so the pick is uniform over the live reads in one pass
+        /// and with no list to allocate — this runs on the decision-step path.
+        /// </summary>
+        private Systems_IPlayerHandle PickFromReads(
+            float bestRoom, Systems_IPlayerHandle best)
+        {
+            float threshold = bestRoom * ACCEPTABLE_READ_SHARE;
+
+            Systems_IPlayerHandle chosen = null;
+            int seen = 0;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle candidate = _registry.Get(slotIndex);
+
+                if (candidate == null
+                    || candidate.Side != Systems_TeamSide.Offense
+                    || candidate.Id == Id
+                    || !candidate.Role.IsEligibleReceiver()
+                    || candidate.Position.y <= Position.y)
+                {
+                    continue;
+                }
+
+                float room = RoomSquared(candidate.Position);
+
+                if (room < threshold)
+                {
+                    continue;
+                }
+
+                seen++;
+
+                if (NextHeuristicUnit() < 1f / seen)
+                {
+                    chosen = candidate;
+                }
+            }
+
+            return chosen ?? best;
+        }
+
+        /// <summary>
+        /// The receiver with the most room — furthest from its nearest defender,
+        /// and downfield of the throw. Nothing clever, but it means a completion is
+        /// a reward for the routes having spread rather than a coin flip.
+        /// </summary>
+        private Systems_IPlayerHandle MostOpenReceiver()
+        {
+            if (_registry == null)
+            {
+                return null;
+            }
+
+            Systems_IPlayerHandle best = null;
+            float bestRoom = -1f;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle candidate = _registry.Get(slotIndex);
+
+                if (candidate == null
+                    || candidate.Side != Systems_TeamSide.Offense
+                    || candidate.Id == Id
+                    || !candidate.Role.IsEligibleReceiver()
+                    || candidate.Position.y <= Position.y)
+                {
+                    continue;
+                }
+
+                float room = RoomSquared(candidate.Position);
+
+                if (room > bestRoom)
+                {
+                    bestRoom = room;
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        // =====================================================================
+        // Revision 14: the scripted special teams, returns, pitches and throwaways
+        // =====================================================================
+
+        /// <summary>
+        /// A return-team blocker and the man he would block both have to be this
+        /// close to the returner for the block to be on, metres.
+        /// </summary>
+        private const float RETURN_BLOCKING_RANGE_METRES = 8f;
+
+        /// <summary>A loose ball this close is worth going for, metres.</summary>
+        private const float LOOSE_BALL_CHASE_METRES = 15f;
+
+        /// <summary>How far past the man in front a run blocker aims: through him, upfield.</summary>
+        private const float RUN_BLOCK_DRIVE_METRES = 1.5f;
+
+        /// <summary>How far out of his own end zone a quarterback holding for a run stands.</summary>
+        private const float RUN_GOAL_LINE_CUSHION_METRES = 2.0f;
+
+        /// <summary>A pitch in the air this close is worth going to meet, metres.</summary>
+        private const float LATERAL_CHASE_METRES = 8f;
+
+        /// <summary>A read with a defender this close is blanketed, metres.</summary>
+        private const float COVERED_ROOM_METRES = 0.7f;
+
+        /// <summary>
+        /// Ticks before the throw window shuts at which a quarterback still holding
+        /// the ball under pressure breaks out of the pocket.
+        /// </summary>
+        private const int THROWAWAY_LEAD_TICKS = 25;
+
+        /// <summary>How far upfield a throwaway is aimed against how far sideways.</summary>
+        private const float THROWAWAY_UPFIELD_SLOPE = 0.6f;
+
+        /// <summary>A rusher this close is pressure, metres.</summary>
+        private const float PRESSURE_METRES = 3.5f;
+
+        /// <summary>
+        /// Chance per decision that a carrier about to be tackled pitches it to a
+        /// trailing team-mate. Small: a real game has a lateral every few games.
+        /// </summary>
+        private const float PITCH_CHANCE_PER_DECISION = 0.004f;
+
+        /// <summary>A carrier with a defender this close is about to be tackled, metres.</summary>
+        private const float ABOUT_TO_BE_TACKLED_METRES = 1.4f;
+
+        /// <summary>Distance at which the option quarterback pitches to the back, metres.</summary>
+        private const float OPTION_PITCH_METRES = 2.5f;
+
+        /// <summary>
+        /// The quarterback's x in the pocket — where he stands, unless the rush is on
+        /// him late in the down, when he breaks out of the tackle box so that a
+        /// throwaway is legal.
+        /// </summary>
+        private float PocketX(Vector2 position)
+        {
+            bool late = _play.Call.IsPass()
+                && _play.PhysicsTick
+                    >= Systems_SimConstants.THROW_WINDOW_TICKS - (3 * THROWAWAY_LEAD_TICKS);
+
+            if (!late || !IsUnderPressure())
+            {
+                return position.x;
+            }
+
+            float side = position.x >= 0f ? 1f : -1f;
+            return side * (Systems_SimConstants.TACKLE_BOX_HALF_WIDTH + 2f);
+        }
+
+        private bool IsUnderPressure()
+        {
+            Systems_IPlayerHandle rusher = NearestOpponent();
+
+            return rusher != null
+                && Vector2.Distance(rusher.Position, Position) < PRESSURE_METRES;
+        }
+
+        /// <summary>
+        /// Squared distance from a point to the nearest defender: the room a
+        /// receiver standing there has. Shared by every read the quarterback makes.
+        /// </summary>
+        private float RoomSquared(Vector2 at)
+        {
+            float room = float.MaxValue;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle defender = _registry.Get(slotIndex);
+
+                if (defender == null || defender.Side != Systems_TeamSide.Defense)
+                {
+                    continue;
+                }
+
+                room = Mathf.Min(room, (defender.Position - at).sqrMagnitude);
+            }
+
+            return room;
+        }
+
+        /// <summary>Distance from this receiver to the nearest defender, metres.</summary>
+        private float RoomOf(Systems_IPlayerHandle receiver)
+        {
+            if (_registry == null)
+            {
+                return float.MaxValue;
+            }
+
+            float nearestSquared = float.MaxValue;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle defender = _registry.Get(slotIndex);
+
+                if (defender == null || defender.Side == receiver.Side)
+                {
+                    continue;
+                }
+
+                nearestSquared = Mathf.Min(
+                    nearestSquared, (defender.Position - receiver.Position).sqrMagnitude);
+            }
+
+            return Mathf.Sqrt(nearestSquared);
+        }
+
+        /// <summary>
+        /// THE OPTION. A quarterback keeping it pitches to the halfback trailing him
+        /// once the edge defender commits — inside OPTION_PITCH_METRES.
+        /// </summary>
+        private void HeuristicOption(
+            ActionSegment<float> continuousActions, ActionSegment<int> discreteActions)
+        {
+            if (!CanLateral())
+            {
+                return;
+            }
+
+            Systems_IPlayerHandle chaser = NearestOpponent();
+
+            if (chaser == null
+                || Vector2.Distance(chaser.Position, Position) > OPTION_PITCH_METRES)
+            {
+                return;
+            }
+
+            Systems_IPlayerHandle back = _registry.Get(Systems_Formation.HALFBACK_SLOT_INDEX);
+
+            if (back == null || _ballSystem.ResolveLateralTarget(this, back.Position - Position) != back)
+            {
+                return;
+            }
+
+            Vector2 toBack = (back.Position - Position).normalized;
+
+            discreteActions[1] = 1;
+            continuousActions[2] = toBack.x;
+            continuousActions[3] = toBack.y;
+        }
+
+        /// <summary>A carrier about to go down sometimes gets rid of it to a man behind him.</summary>
+        private void HeuristicPitch(ActionSegment<int> discreteActions)
+        {
+            if (!CanLateral())
+            {
+                return;
+            }
+
+            Systems_IPlayerHandle chaser = NearestOpponent();
+
+            if (chaser == null
+                || Vector2.Distance(chaser.Position, Position) > ABOUT_TO_BE_TACKLED_METRES)
+            {
+                return;
+            }
+
+            if (NextHeuristicUnit() < PITCH_CHANCE_PER_DECISION)
+            {
+                discreteActions[LATERAL_BRANCH] = LATERAL_PITCH;
+            }
+        }
+
+        /// <summary>
+        /// A returner's blocker: between the nearest man chasing and the ball — but
+        /// only a man already near the returner. Everybody else runs with the play
+        /// and arrives too late to block anyone, which is what a return unit that
+        /// was set up to cover a pass actually does. Blocking every pursuer on the
+        /// field at once turned half the interceptions into touchdowns.
+        /// </summary>
+        private Vector2 ReturnBlockTarget(Vector2 position, Systems_IPlayerHandle returner)
+        {
+            Systems_IPlayerHandle chaser = NearestOpponent();
+
+            bool inThePlay = chaser != null
+                && Vector2.Distance(chaser.Position, returner.Position) < RETURN_BLOCKING_RANGE_METRES
+                && Vector2.Distance(position, returner.Position) < RETURN_BLOCKING_RANGE_METRES;
+
+            if (!inThePlay)
+            {
+                return returner.Position;
+            }
+
+            Vector2 toReturner = returner.Position - chaser.Position;
+
+            if (toReturner.sqrMagnitude < 0.0001f)
+            {
+                return chaser.Position;
+            }
+
+            return chaser.Position
+                + (toReturner.normalized * Systems_SimConstants.BLOCK_CUSHION);
+        }
+
+        /// <summary>
+        /// The kicking game, scripted. Returns false to fall through to the ordinary
+        /// jobs — a punt team's line blocks exactly as an offensive line does.
+        ///
+        /// BEFORE THE KICK: the kickoff units stand; on a punt the gunners release,
+        /// the punter waits, the rushers go for him and the jammers take the gunners;
+        /// on a placekick everybody blocks or rushes. IN THE AIR: the returner goes
+        /// to where it will come down, his team-mates get in front of the cover men,
+        /// and the cover team runs to the ball — all but the kicker, who stays back as
+        /// the last man.
+        /// </summary>
+        private bool TrySpecialTeamsTarget(Vector2 position, out Vector2 target)
+        {
+            target = position;
+            Systems_PlayKind kind = _play.Kind;
+
+            if (!kind.IsKick() || _ball == null)
+            {
+                return false;
+            }
+
+            bool beforeTheKick = !_play.WasKicked
+                && _ball.IsHeld
+                && _ball.CarrierId == Systems_Formation.QUARTERBACK_SLOT_INDEX
+                && _ball.PossessingSide == Systems_TeamSide.Offense;
+
+            if (beforeTheKick)
+            {
+                return BeforeTheKick(position, kind, ref target);
+            }
+
+            if (!_ball.IsKicked)
+            {
+                return false;
+            }
+
+            if (kind.IsPlaceKick())
+            {
+                // Nothing to do but watch it.
+                return true;
+            }
+
+            Vector2 landing = PredictKickLanding();
+
+            if (_side == Systems_TeamSide.Defense)
+            {
+                if (IsTheReturner(landing))
+                {
+                    _settleRadius = 1.5f;
+                    target = landing;
+                    return true;
+                }
+
+                Systems_IPlayerHandle coverMan = NearestOpponent();
+
+                if (coverMan == null)
+                {
+                    target = landing;
+                    return true;
+                }
+
+                Vector2 toLanding = landing - coverMan.Position;
+
+                target = toLanding.sqrMagnitude < 0.0001f
+                    ? coverMan.Position
+                    : coverMan.Position + (toLanding.normalized * Systems_SimConstants.BLOCK_CUSHION);
+
+                return true;
+            }
+
+            if (_hasQuarterbackActions)
+            {
+                // The kicker is the last man back.
+                target = new Vector2(
+                    landing.x * 0.3f,
+                    Mathf.Min(landing.y - 15f, _play.LineOfScrimmageY + 20f));
+
+                _settleRadius = ZONE_SETTLE_RADIUS;
+                return true;
+            }
+
+            target = landing;
+            return true;
+        }
+
+        private bool BeforeTheKick(Vector2 position, Systems_PlayKind kind, ref Vector2 target)
+        {
+            if (_side == Systems_TeamSide.Offense)
+            {
+                if (kind == Systems_PlayKind.Kickoff || _hasQuarterbackActions)
+                {
+                    target = position;
+                    return true;
+                }
+
+                // The gunners are off at the snap.
+                if (kind == Systems_PlayKind.Punt && _role == Systems_PlayerRole.WideReceiver)
+                {
+                    target = new Vector2(position.x, Systems_FieldModel.ATTACKING_GOAL_LINE_Y);
+                    return true;
+                }
+
+                // Everybody else blocks, exactly as a line does.
+                return false;
+            }
+
+            if (kind == Systems_PlayKind.Kickoff || _role == Systems_PlayerRole.Safety)
+            {
+                _settleRadius = ZONE_SETTLE_RADIUS;
+                target = position;
+                return true;
+            }
+
+            if (kind == Systems_PlayKind.Punt && _role == Systems_PlayerRole.Cornerback)
+            {
+                Systems_IPlayerHandle gunner = NearestOpponentOfRole(Systems_PlayerRole.WideReceiver);
+
+                if (gunner != null)
+                {
+                    target = InterceptOf(gunner);
+                    return true;
+                }
+            }
+
+            Systems_IPlayerHandle kicker = _registry == null
+                ? null
+                : _registry.Get(Systems_Formation.QUARTERBACK_SLOT_INDEX);
+
+            target = kicker == null ? position : InterceptOf(kicker);
+            return true;
+        }
+
+        /// <summary>
+        /// Where the kick in the air will come down: the projectile solved for the
+        /// tick its height reaches the turf.
+        /// </summary>
+        private Vector2 PredictKickLanding()
+        {
+            float vertical = _ball.VerticalVelocity;
+            float height = Mathf.Max(0f, _ball.Height);
+            float gravity = Systems_SimConstants.KICK_GRAVITY;
+
+            float seconds = (vertical + Mathf.Sqrt((vertical * vertical) + (2f * gravity * height)))
+                / gravity;
+
+            Vector2 landing = _ball.Position + (_ball.Velocity * seconds);
+
+            return Systems_FieldModel.ClampToField(landing);
+        }
+
+        /// <summary>The safety nearer to where the kick is coming down fields it; the other blocks.</summary>
+        private bool IsTheReturner(Vector2 landing)
+        {
+            if (_role != Systems_PlayerRole.Safety || _registry == null)
+            {
+                return false;
+            }
+
+            int otherSlot = _formationSlotIndex == Systems_FormationBook.FREE_SAFETY_SLOT_INDEX
+                ? Systems_FormationBook.STRONG_SAFETY_SLOT_INDEX
+                : Systems_FormationBook.FREE_SAFETY_SLOT_INDEX;
+
+            Systems_IPlayerHandle other = _registry.Get(otherSlot);
+
+            return other == null
+                || (Position - landing).sqrMagnitude <= (other.Position - landing).sqrMagnitude;
+        }
+
+        private Systems_IPlayerHandle NearestOpponentOfRole(Systems_PlayerRole role)
+        {
+            if (_registry == null)
+            {
+                return null;
+            }
+
+            Systems_IPlayerHandle best = null;
+            float bestSquared = float.MaxValue;
+
+            for (int slotIndex = 0; slotIndex < Systems_PlayerRegistry.CAPACITY; slotIndex++)
+            {
+                Systems_IPlayerHandle candidate = _registry.Get(slotIndex);
+
+                if (candidate == null || candidate.Side == _side || candidate.Role != role)
+                {
+                    continue;
+                }
+
+                float squared = (candidate.Position - Position).sqrMagnitude;
+
+                if (squared < bestSquared)
+                {
+                    bestSquared = squared;
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+    }
+}

@@ -13,9 +13,9 @@ field, and in `Training` none of it is in the container.
 
 | I want to… | Do this |
 |---|---|
-| Play/watch a game | Open `Assets/Scenes/SCN_MENU.unity`, press Play, tap **PLAY** |
-| Jump straight to a game | Open `Assets/Scenes/SCN_GAME.unity`, press Play |
-| Train | Open `Assets/Scenes/SCN_TRAIN_FOOTBALL.unity` — unchanged, still `Training` |
+| Play/watch a game | Open `Assets/_Project/Scenes/SCN_MENU.unity`, press Play, tap **PLAY** |
+| Jump straight to a game | Open `Assets/_Project/Scenes/SCN_GAME.unity`, press Play |
+| Train | Open `Assets/_Project/Scenes/SCN_TRAIN_FOOTBALL.unity` — unchanged, still `Training` |
 
 Build order is `SCN_MENU` (0), `SCN_GAME` (1), `SCN_TRAIN_FOOTBALL` (2), so a
 player build opens on the front end.

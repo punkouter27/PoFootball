@@ -6,14 +6,14 @@
 > `config/poca/StrikersVsGoalie.yaml` at release_22 trains two behaviors, one team
 > id each, with `self_play` on both. What stalled base04 was more likely several
 > same-team trainers each toggling the learning team on their own `team_change`
-> clock. `Config/FootballSelf01.yaml` has the corrected setup; the rest of this
+> clock. `Training/FootballSelf01.yaml` has the corrected setup; the rest of this
 > note is left as it was written.
 
 Started 00:11 EDT. Watchdog holds it until 08:17 EDT, then stops watching and
 leaves training running.
 
 ```
-mlagents-learn Config\FootballBase05.yaml --run-id=football_base05 `
+mlagents-learn Training\FootballBase05.yaml --run-id=football_base05 `
   --env=Builds\FootballEnv\PoFootball.exe --no-graphics `
   --base-port=5010 --num-envs=6
 ```
@@ -68,7 +68,7 @@ trainer with no ghost, and it was silently killing half the brains.
 
 ### Fix
 
-`Config/FootballBase05.yaml` is byte-identical to `FootballBase04.yaml` with
+`Training/FootballBase05.yaml` is byte-identical to `FootballBase04.yaml` with
 the single `self_play` block removed from the `&football_brain` anchor (all six
 behaviors inherited it from there). Everything else — hyperparameters, the
 quarterback's raised `beta: 2.0e-2`, `normalize: false`, `time_horizon: 150` —
@@ -141,7 +141,7 @@ That is exactly what had to be cleaned up before this run could start.
 
 ## In the morning
 
-Nothing is promoted. `Assets/Agents/Football_v01` **has since been deleted** — it
+Nothing is promoted. `Assets/_Project/RL_Models/Football_v01` **has since been deleted** — it
 held the stale football_base02 brains, which were unloadable against the
 six-behavior contract. No `Resources/PoFootballBrains.asset` exists either, so
 `Agent_BrainRegistry.ModelFor` returns null, both scenes run

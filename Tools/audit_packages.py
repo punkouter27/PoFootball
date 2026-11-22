@@ -3,8 +3,8 @@
 Report-only — does not modify manifest.json. Emits:
 
   * PER-PACKAGE: `com.unity.x` → referenced / not referenced / dev-only
-  * PER-USING: every `using <ns>;` that resolved under Assets/Plugins, Assets/Scripts,
-    and Assets/Tests, mapped to the package it most likely came from
+  * PER-USING: every `using <ns>;` that resolved under Assets/Plugins, Assets/_Project,
+    and Assets/_Project/Core/Tests, mapped to the package it most likely came from
 
 The output is a draft `Packages/manifest.json.diff` next to `manifest.json` that
 lists packages recommended for removal, with the "why" (no references found) and
@@ -28,9 +28,7 @@ DIFF_OUT = REPO_ROOT / "Packages" / "manifest.json.diff"
 
 # Only look at code that actually feeds the player build.
 SEARCH_DIRS = [
-    ASSETS / "Scripts",
-    ASSETS / "Tests",
-    ASSETS / "Editor",
+    ASSETS / "_Project",
     ASSETS / "Plugins",
 ]
 

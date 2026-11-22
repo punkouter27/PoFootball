@@ -1,6 +1,6 @@
 """Per-file complexity report.
 
-For every .cs file under Assets/Scripts, compute:
+For every .cs file under Assets/_Project, compute:
 
   * LOC                        — total lines
   * SLOC                       — non-blank, non-comment-only lines
@@ -24,7 +24,11 @@ ASSETS = REPO_ROOT / "Assets"
 DOCS = REPO_ROOT / "docs"
 DOCS.mkdir(exist_ok=True)
 
-PROD_DIRS = [ASSETS / "Scripts"]
+PROD_DIRS = [
+    ASSETS / "_Project" / "Agents",
+    ASSETS / "_Project" / "Core" / "Systems",
+    ASSETS / "_Project" / "UI" / "View",
+]
 
 
 def strip_comments(text: str) -> str:

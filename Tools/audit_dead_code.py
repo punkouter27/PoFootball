@@ -23,7 +23,7 @@ ASSETS = REPO_ROOT / "Assets"
 DOCS = REPO_ROOT / "docs"
 DOCS.mkdir(exist_ok=True)
 
-PROD_DIRS = [ASSETS / "Scripts", ASSETS / "Editor", ASSETS / "Plugins", ASSETS / "Tests"]
+PROD_DIRS = [ASSETS / "_Project", ASSETS / "Plugins"]
 
 # Each csproj under the root is a "module" — only count references from a
 # different module than the declaration's module.
@@ -31,17 +31,17 @@ CSPROJS = [p for p in REPO_ROOT.glob("*.csproj")]
 
 
 # Maps a .cs file → its containing csproj's name (e.g. "PoFootball.Systems").
-# The Scripts/ structure is Assets/Scripts/<ModuleName>/<sub?>/*.cs, so we
-# derive the module name from the first folder level under Scripts/.
+# The code lives in Assets/_Project/<Area>/<ModuleName>/<sub?>/*.cs (Agents/Agent,
+# Core/Systems, UI/View, ...), so the module name is the second folder level.
 def _module_of(cs_path: Path) -> str:
     try:
-        rel = cs_path.relative_to(ASSETS / "Scripts")
+        rel = cs_path.relative_to(ASSETS / "_Project")
     except ValueError:
         return "unknown"
     parts = rel.parts
-    if len(parts) < 2:
+    if len(parts) < 3:
         return "unknown"
-    return parts[0]
+    return "Systems" if parts[1] == "View" else parts[1]
 
 
 MODULE_OWNERS: dict[str, str] = {}

@@ -123,9 +123,9 @@ exactly so the 80% cut of 2026-08-22 survives.
 ## UI — `Systems_UiTheme`, `Systems_ScreenView`, `Systems_HudView`
 
 **Two fonts shipped with the project and neither was used.**
-`BebasNeue-Regular.ttf` and `Oswald-Variable.ttf` were in `Assets/Art/Fonts`,
+`BebasNeue-Regular.ttf` and `Oswald-Variable.ttf` were in `Assets/_Project/Environments/Art/Fonts`,
 `PanelSettings.textSettings` was unset, and every label rendered in the UI Toolkit
-default face. They now live in `Assets/Resources/Fonts` (moved with their `.meta`
+default face. They now live in `Assets/_Project/Data/Resources/Fonts` (moved with their `.meta`
 files, so GUIDs are intact) and are applied through the theme's factories, so every
 existing call site picked them up with no edit. Bebas is the display face
 (numerals, headlines, buttons, wordmark); Oswald carries everything read rather
@@ -229,10 +229,10 @@ rate that changes with fatigue makes `sin(time * rate)` jump.
   Toolkit with no sprites.
 
 `Tools > PoFootball > Build UI Sprite Atlas` is left as working infrastructure for
-the day real UI art arrives. It refuses `Assets/Art/Shapes` rather than trusting
+the day real UI art arrives. It refuses `Assets/_Project/Environments/Art/Shapes` rather than trusting
 whoever runs it to remember the above.
 
-The audit **exempts `Assets/Resources`**, because `Resources.Load` takes a path and
+The audit **exempts `Assets/_Project/Data/Resources`**, because `Resources.Load` takes a path and
 a resource's GUID appears in no asset file — a reference scan reports everything
 there as dead. Its first run listed the two UI typefaces as unused.
 

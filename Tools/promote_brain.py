@@ -1,12 +1,12 @@
-"""Promote trained .onnx brains into Assets/Agents/, but only if they fit.
+"""Promote trained .onnx brains into Assets/_Project/RL_Models/, but only if they fit.
 
 WHY THIS EXISTS
 ---------------
-Assets/Agents/Football_v01 shipped four brains taken from run football_base02 at
+Assets/_Project/RL_Models/Football_v01 shipped four brains taken from run football_base02 at
 about 500k steps, against a scene that had since moved to a different contract.
 The mismatch was total and completely silent:
 
-    Assets/Agents/Football_v01/OffenseSkill.onnx   obs_1 = 25, continuous = 2,
+    Assets/_Project/RL_Models/Football_v01/OffenseSkill.onnx   obs_1 = 25, continuous = 2,
                                                    no discrete output at all
     what the scene asks for                        obs_1 = 32, continuous = 4,
                                                    discrete branches [5, 2]
@@ -25,11 +25,11 @@ WHAT IT CHECKS
 Every expected value is READ from the repository rather than typed here, so this
 script cannot itself drift from the contract it is guarding:
 
-    OBSERVATION_SIZE, PLAY_CALL_BRANCH_SIZE   Assets/Scripts/Sensor/Sensor_FootballState.cs
+    OBSERVATION_SIZE, PLAY_CALL_BRANCH_SIZE   Assets/_Project/Agents/Sensor/Sensor_FootballState.cs
     continuous action counts, THROW_BRANCH_SIZE,
-    LATERAL_BRANCH_SIZE (revision 14)         Assets/Scripts/Agent/Agent_ActionContract.cs
-    behavior names, which one carries the QB actions  Assets/Scripts/Systems/Model/Systems_RoleTable.cs
-    ray sensor observation width               Assets/Scripts/Sensor/Sensor_RayContract.cs
+    LATERAL_BRANCH_SIZE (revision 14)         Assets/_Project/Agents/Agent/Agent_ActionContract.cs
+    behavior names, which one carries the QB actions  Assets/_Project/Core/Systems/Model/Systems_RoleTable.cs
+    ray sensor observation width               Assets/_Project/Agents/Sensor/Sensor_RayContract.cs
                                                (the scene until revision 10)
 
 TWO GATES ON THE RUN ITSELF, NOT JUST ITS SHAPES
@@ -84,13 +84,13 @@ except ImportError:  # pragma: no cover - environment problem, not a logic path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-SENSOR_CS = REPO_ROOT / "Assets/Scripts/Sensor/Sensor_FootballState.cs"
-DEFENSE_CALL_SENSOR_CS = REPO_ROOT / "Assets/Scripts/Sensor/Sensor_DefenseCallState.cs"
-RAY_CS = REPO_ROOT / "Assets/Scripts/Sensor/Sensor_RayContract.cs"
-ACTION_CS = REPO_ROOT / "Assets/Scripts/Agent/Agent_ActionContract.cs"
-ROLE_TABLE_CS = REPO_ROOT / "Assets/Scripts/Systems/Model/Systems_RoleTable.cs"
+SENSOR_CS = REPO_ROOT / "Assets/_Project/Agents/Sensor/Sensor_FootballState.cs"
+DEFENSE_CALL_SENSOR_CS = REPO_ROOT / "Assets/_Project/Agents/Sensor/Sensor_DefenseCallState.cs"
+RAY_CS = REPO_ROOT / "Assets/_Project/Agents/Sensor/Sensor_RayContract.cs"
+ACTION_CS = REPO_ROOT / "Assets/_Project/Agents/Agent/Agent_ActionContract.cs"
+ROLE_TABLE_CS = REPO_ROOT / "Assets/_Project/Core/Systems/Model/Systems_RoleTable.cs"
 RESULTS_DIR = REPO_ROOT / "results"
-AGENTS_DIR = REPO_ROOT / "Assets/Agents"
+AGENTS_DIR = REPO_ROOT / "Assets/_Project/RL_Models"
 
 # Fraction of physics ticks on which Agent_FootballPlayer.ClampSpeed may fire,
 # averaged over the last SPEED_CLAMP_WINDOW summaries of every behavior. The guard
@@ -633,7 +633,7 @@ def write_manifest(target_dir: Path, run: str, num_envs: int, sources: dict, con
 
 def verify_promoted(contract: dict) -> int:
     """
-    Audit what is ALREADY in Assets/Agents/ against the current contract.
+    Audit what is ALREADY in Assets/_Project/RL_Models/ against the current contract.
 
     This is the mode that matters most day to day. Promotion happens once; the
     code around a promoted brain then keeps moving, and nothing tells you when it
@@ -717,7 +717,7 @@ def main() -> int:
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="audit the brains already in Assets/Agents/ against the current contract",
+        help="audit the brains already in Assets/_Project/RL_Models/ against the current contract",
     )
     parser.add_argument(
         "--check-realism",

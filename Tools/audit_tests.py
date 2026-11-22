@@ -1,6 +1,6 @@
 """Test/code parity sweep.
 
-For every `Assets/Tests/**/*.cs` file:
+For every `Assets/_Project/Core/Tests/**/*.cs` file:
   1. Collect every identifier that LOOKS LIKE a type name (PascalCase, >= 5 chars,
      not a keyword).
   2. Subtract identifiers that exist as `class`/`struct`/`enum`/`interface`
@@ -27,8 +27,14 @@ ASSETS = REPO_ROOT / "Assets"
 DOCS = REPO_ROOT / "docs"
 DOCS.mkdir(exist_ok=True)
 
-TEST_DIRS = [ASSETS / "Tests"]
-PROD_DIRS = [ASSETS / "Scripts", ASSETS / "Editor", ASSETS / "Plugins"]
+TEST_DIRS = [ASSETS / "_Project" / "Core" / "Tests"]
+PROD_DIRS = [
+    ASSETS / "_Project" / "Agents",
+    ASSETS / "_Project" / "Core" / "Systems",
+    ASSETS / "_Project" / "Core" / "Editor",
+    ASSETS / "_Project" / "UI",
+    ASSETS / "Plugins",
+]
 
 TYPE_DECL_RE = re.compile(r"\b(class|struct|enum|interface|record)\s+([A-Z][A-Za-z0-9_]+)")
 IDENT_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]{4,})\b")

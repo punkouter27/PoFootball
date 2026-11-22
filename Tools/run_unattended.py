@@ -2,7 +2,7 @@
 judge it and write its report.
 
     .venv\\Scripts\\python.exe Tools\\run_unattended.py --run football_base26 `
-        --config Config\\FootballBase26.yaml --hours 8 --resume --stall-after 1500000
+        --config Training\\FootballBase26.yaml --hours 8 --resume --stall-after 1500000
 
 WHAT IT DOES, IN ORDER
 ----------------------

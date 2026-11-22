@@ -43,7 +43,7 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SENSOR = REPO_ROOT / "Assets/Scripts/Sensor/Sensor_FootballState.cs"
+SENSOR = REPO_ROOT / "Assets/_Project/Agents/Sensor/Sensor_FootballState.cs"
 
 ROLES = (
     "Quarterback",

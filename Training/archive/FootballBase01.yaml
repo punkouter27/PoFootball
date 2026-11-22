@@ -1,0 +1,103 @@
+# PoFootball — base self-play phase
+#
+# Pairs 1:1 with run-id `football_base01` (UNITY_RULES §1).
+#   mlagents-learn Training/FootballBase01.yaml --run-id=football_base01
+#
+# FOUR behaviors, one per position group, matching Systems_BrainGroup and the
+# strings returned by Systems_RoleTable.BehaviorNameOf. A mismatch between these
+# keys and those literals means the handshake succeeds but the agents in that
+# group never receive actions.
+#
+#   OffenseLine   5 agents  TeamId 0   (OL)
+#   OffenseSkill  6 agents  TeamId 0   (QB, RB, 3x WR, TE)
+#   DefenseLine   4 agents  TeamId 1   (DL)
+#   DefenseCover  7 agents  TeamId 1   (LB, CB, S)
+#
+# This is asymmetric self-play: the two sides have different behaviors rather
+# than one shared behavior split by team. Judge each behavior on its own
+# Self-play/ELO curve in TensorBoard, not on mean reward — reward is zero-sum
+# here and hovers near 0 no matter how good the policies get (UNITY_RULES §4).
+#
+# Read the ELO curves against each other, not in isolation: a rising DefenseLine
+# ELO can mean the defensive line improved OR that the offensive line decayed.
+
+default_settings: null
+
+behaviors:
+  OffenseLine: &football_brain
+    trainer_type: ppo
+
+    hyperparameters:
+      batch_size: 2048
+      buffer_size: 20480          # 10x batch_size; PPO wants many batches per update
+      learning_rate: 3.0e-4
+      beta: 5.0e-3                # entropy bonus — keep exploration alive through self-play
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 3
+      learning_rate_schedule: constant   # self-play runs long; a linear decay to 0
+                                         # freezes the policy while opponents keep improving
+      beta_schedule: constant
+      epsilon_schedule: constant
+
+    network_settings:
+      normalize: false            # Sensor_FootballState already emits [-1, 1]; running
+                                  # normalization on top fights self-play because the
+                                  # input distribution shifts with the opponent
+      hidden_units: 512
+      num_layers: 2
+      vis_encode_type: simple
+
+    reward_signals:
+      extrinsic:
+        gamma: 0.99
+        strength: 1.0
+
+    keep_checkpoints: 40
+    checkpoint_interval: 500000
+    max_steps: 50000000
+
+    # A play is capped at 750 physics ticks and agents decide every 5th tick
+    # (Systems_PlayModel.MAX_DECISIONS = 150), so 150 keeps an entire play inside
+    # one horizon and lets credit for a touchdown reach back to the snap.
+    time_horizon: 150
+
+    summary_freq: 20000
+    threaded: false               # deterministic ordering (UNITY_RULES §2)
+
+    self_play:
+      save_steps: 50000
+      team_change: 250000         # 5x save_steps — the documented default ratio
+      swap_steps: 25000
+      window: 10
+      play_against_latest_model_ratio: 0.5
+      initial_elo: 1200.0
+
+  OffenseSkill:
+    <<: *football_brain
+
+  DefenseLine:
+    <<: *football_brain
+
+  DefenseCover:
+    <<: *football_brain
+
+env_settings:
+  # Set per-run on the command line, not here, so this file stays the same
+  # across the headless sweep and the in-editor smoke test:
+  #   --env=Builds/FootballEnv/PoFootball.exe --no-graphics --base-port=5010 --num-envs=6
+  # Envs take CONSECUTIVE ports from --base-port; overlapping ranges hang the
+  # handshake with no error (UNITY_RULES §4).
+  seed: 1
+
+engine_settings:
+  time_scale: 20                  # physics stays at dt=0.02; this only speeds the clock
+  quality_level: 0
+  target_frame_rate: -1
+  capture_frame_rate: 60
+
+torch_settings:
+  device: cuda                    # RTX 2060 present; falls back to cpu if unavailable
+
+checkpoint_settings:
+  results_dir: results

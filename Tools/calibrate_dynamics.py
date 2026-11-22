@@ -44,8 +44,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SIM_CONSTANTS = REPO_ROOT / "Assets/Scripts/Systems/Model/Systems_SimConstants.cs"
-ROLE_TABLE = REPO_ROOT / "Assets/Scripts/Systems/Model/Systems_RoleTable.cs"
+SIM_CONSTANTS = REPO_ROOT / "Assets/_Project/Core/Systems/Model/Systems_SimConstants.cs"
+ROLE_TABLE = REPO_ROOT / "Assets/_Project/Core/Systems/Model/Systems_RoleTable.cs"
 
 TICK = 0.02
 YARD = 0.9144

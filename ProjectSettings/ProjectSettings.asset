@@ -149,7 +149,7 @@ PlayerSettings:
   loadStoreDebugModeEnabled: 0
   visionOSBundleVersion: 1.0
   tvOSBundleVersion: 1.0
-  bundleVersion: 261118
+  bundleVersion: 261122
   preloadedAssets:
   - {fileID: -944628639613478452, guid: 2bcd2660ca9b64942af0de543d8d7100, type: 3}
   metroInputSource: 0
@@ -263,7 +263,7 @@ PlayerSettings:
   shaderPrecisionModel: 0
   clonedFromGUID: c19f32bac17ee4170b3bf8a6a0333fb9
   templatePackageId: com.unity.template.universal-2d@6.1.5
-  templateDefaultScene: Assets/Scenes/SCN_MENU.unity
+  templateDefaultScene: Assets/_Project/Scenes/SCN_MENU.unity
   useCustomMainManifest: 0
   useCustomLauncherManifest: 0
   useCustomMainGradleTemplate: 0
@@ -731,7 +731,7 @@ PlayerSettings:
     Server: UNITY_MCP_READY;UNITY_MCP_DEPS_38
     Standalone: APP_UI_EDITOR_ONLY;UNITY_MCP_READY;UNITY_MCP_DEPS_38
     VisionOS: UNITY_MCP_READY;UNITY_MCP_DEPS_38
-    WebGL: SENTIS_ANALYTICS_ENABLED;UNITY_MCP_READY;UNITY_MCP_DEPS_38
+    WebGL: APP_UI_EDITOR_ONLY;UNITY_MCP_READY;UNITY_MCP_DEPS_38
     Windows Store Apps: UNITY_MCP_READY;UNITY_MCP_DEPS_38
     XboxOne: UNITY_MCP_READY;UNITY_MCP_DEPS_38
     iPhone: UNITY_MCP_READY;UNITY_MCP_DEPS_38

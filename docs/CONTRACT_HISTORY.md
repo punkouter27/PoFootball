@@ -25,7 +25,7 @@ only, still revision 18. `football_base33` (`FootballBase33`) continues from bas
 final checkpoints, FullGame only. Not yet diagnosed from a replay: which carriers the
 expired plays had (the base32 metrics suggest catches run after, not runs).
 
-**`Assets/Agents/Football_v02` is promoted but REFUSED, so every player runs
+**`Assets/_Project/RL_Models/Football_v02` is promoted but REFUSED, so every player runs
 `Heuristic` until a revision 17 run (`football_base25`) is promoted.** v02 came from
 `football_base14` (contract revision 12, 2026-10-03), a run cut short to 1.2M steps
 with a quarterback only 32k steps old and a defense that never learned to pursue
@@ -38,14 +38,14 @@ NEVER PROMOTED.** Revision 14 changed the shapes as well as the game, so it cann
 load in this build at all. To promote or realism-check it, check out `981ba23`, the
 last revision 13 commit — and it will still only ever run in a revision 13 build.
 
-`Assets/Agents/Football_v01` is still on disk and is older still: `football_base12`,
+`Assets/_Project/RL_Models/Football_v01` is still on disk and is older still: `football_base12`,
 contract revision 10, 7M steps. While the build was on revision 10 all 22 players
 ran it — verified in a played game, 22 of 22 agents with a model. It FAILS the
 realism gate (18.8 yards per play, 0.78 TDs per drive, 97% completions; see its
 MANIFEST.md) because the offense found two rules defects, and fixing those rules was
 revision 11.
 
-An EARLIER `Assets/Agents/Football_v01` and its table existed until 2026-08-22 and
+An EARLIER `Assets/_Project/RL_Models/Football_v01` and its table existed until 2026-08-22 and
 were deleted, for the reason the stamp exists. They came from `football_base08` at
 **contract revision 4** against a build now on **revision 7**. The table was worse
 than merely old: it carried six entries numbered 0..5 from the six-brain-group era,
@@ -64,7 +64,7 @@ To promote: train against a config for the CURRENT contract revision, run
 Editor. That last step is not optional — the Python side copies `.onnx` files but
 cannot write the ScriptableObject that lists them.
 
-**THE CURRENT REVISION IS 17, AND `Config/FootballBase25.yaml` IS ITS CONFIG
+**THE CURRENT REVISION IS 17, AND `Training/FootballBase25.yaml` IS ITS CONFIG
 (written 2026-10-22, NOT YET RUN).** Every shape is identical to revision 16; what
 moved is what the two continuous actions MEAN. They were a throttle along the facing
 and a steering torque, so a policy had to learn to turn a rotating body before it
@@ -94,7 +94,7 @@ has the numbers. Rebuild `Builds/FootballEnv` before it: a stale revision 16 env
 not refused by the handshake.
 
 Revision 16's own history follows. **Revision 16's config was
-`Config/FootballBase23.yaml`/`FootballBase24.yaml`.**
+`Training/FootballBase23.yaml`/`FootballBase24.yaml`.**
 (`FootballBase18`, archived, was its first: `football_base18` kept the front spread
 but its flag rate climbed from 4% to 12% of plays, because training priced a flag
 at a flat 0.15 while a completion pays 0.45. `Systems_FoulPrice` now charges each
@@ -133,7 +133,7 @@ the pace he is actually running, it is a touchdown. `football_base22`
 zero on each `--initialize-from`; add 1.63M (base19), 1.58M (base20) and 1.40M
 (base21) Offense steps to read a total.
 
-`football_base22` (3.13M more) was promoted as `Assets/Agents/Football_v03` — on
+`football_base22` (3.13M more) was promoted as `Assets/_Project/RL_Models/Football_v03` — on
 disk, NOT committed, and NOT in the brain table — and FAILED the realism gate on
 all five bands: 8.21 yards a play, 0.42 TDs a drive, 8.89 a carry, 0.87
 completions, 0.10 first downs a play (`results/realism/realism-20261017-112731.json`).
@@ -171,7 +171,7 @@ middle linebacker's player creates it at runtime, so no scene carries it. The
 Defense brain is back to `[2]`, the pitch. `football_base17` was stopped at ~2M
 steps and is not promotable.
 
-Revision 15 (2026-10-16, `Config/archive/FootballBase17.yaml`) is the merge of two revision 14s:
+Revision 15 (2026-10-16, `Training/archive/FootballBase17.yaml`) is the merge of two revision 14s:
 Both were built from
 revision 13 in parallel — one on another machine on 2026-10-04, pushed to origin,
 one here on 2026-10-15, never pulled against it — and they shared a number and
@@ -286,7 +286,7 @@ change in this project measured like for like. Neither is comparable with revisi
 
 **`football_base15` cannot be promoted.** It was a revision 13 run and its
 `results/` directory was not on the machine revision 14 was written on. Its config
-is in `Config/archive/`.
+is in `Training/archive/`.
 
 Two ideas were examined in the same pass and deliberately NOT built there, because
 the code already did them: a forward-progress whistle — which THIS machine's
@@ -296,7 +296,7 @@ turning (steering only rotates the body; the velocity turns through the drive
 force, which already caps lateral acceleration at `TopSpeedOf * LINEAR_DAMPING`,
 about 0.75 g for a receiver).
 
-Revision 13 (2026-10-03, `Config/archive/FootballBase15.yaml`) makes execution fallible, with every shape left identical,
+Revision 13 (2026-10-03, `Training/archive/FootballBase15.yaml`) makes execution fallible, with every shape left identical,
 so only the stamp refuses an older brain. Through revision 12 being in position was
 the whole of every skill — a ball inside `CATCH_RADIUS` was caught, a defender
 inside `PASS_BREAKUP_RADIUS` broke it up, a hit over `TACKLE_CLOSING_SPEED` was a
@@ -329,7 +329,7 @@ interceptions down from 3-11 a game to 2 and stalled plays unchanged at 22-31. B
 measurements are three RANDOM seeds, and that 4.2-8.6 spread is the noise: re-measure
 on the four fixed seeds before tuning any of the chances.
 
-Revision 12 (2026-10-03, `Config/archive/FootballBase14.yaml`) changed eight observations and the fatigue dynamics with
+Revision 12 (2026-10-03, `Training/archive/FootballBase14.yaml`) changed eight observations and the fatigue dynamics with
 every shape left identical — still 36 floats — so only the stamp refuses an older
 brain. The ball's offset and velocity are in the body's frame; the two sideline
 distances became own spin and the play clock; fatigue is **rested between plays
@@ -350,7 +350,7 @@ seeds before reading anything into it.
 12 TREE.** It was started 2026-10-03 from commit `278e8c6` and its shapes match, so
 `promote_brain.py` would pass it and Build Brain Table would stamp it 12. To
 promote or realism-check it, check out the commit it was trained at.
-`Config/FootballBase13.yaml` stays out of `Config/archive/` only until that run is
+`Training/FootballBase13.yaml` stays out of `Training/archive/` only until that run is
 finished with.
 
 Revision 11 (FootballBase13) changed two RULES, shapes untouched: a defender within 1.5 m beside or
@@ -375,6 +375,6 @@ the air (an incomplete forty-yard heave used to net the offense +0.30, more than
 run that ended in a tackle), a block no longer outpays the time cost, and there is
 no pursuit reward while the ball is in the air.
 
-Every config for an older contract is in `Config/archive/`, including
+Every config for an older contract is in `Training/archive/`, including
 FootballBase06-12 and 14-22, FootballLong01 and the six `experiments/`
 variants. Until a revision 17 run is promoted, every player is a heuristic.
