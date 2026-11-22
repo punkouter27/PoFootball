@@ -8,20 +8,27 @@
     <title>{{{ PRODUCT_NAME }}}</title>
     <style>
       /* Not Unity's default page: that one draws a fixed canvas plus a footer and
-         scrolls in any window shorter than the canvas. Here the canvas is the
-         largest 9:16 rectangle that fits the window, centred,
-         with the fleet corners (title upper-left, settings gear upper-right, build stamp lower-right). */
-      html, body { margin: 0; height: 100%; background: #0a0f0a; overflow: hidden; font-family: system-ui, sans-serif; color: #e8efe8; }
-      body { display: flex; align-items: center; justify-content: center; }
-      .po-brand { position: fixed; top: 10px; left: 14px; font-weight: 600; font-size: 14px; letter-spacing: 0.04em; color: #e8efe8; text-decoration: none; z-index: 5; opacity: 0.85; }
-      .po-gear { position: fixed; top: 8px; right: 12px; width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid rgba(255,255,255,0.16); background: rgba(16,22,16,0.8); color: #e8efe8; text-decoration: none; font-size: 16px; z-index: 5; }
-      .po-version { position: fixed; right: 10px; bottom: 6px; font-size: 11px; color: #9aa69a; pointer-events: none; z-index: 5; }
-      #frame { position: relative; }
-      #unity-canvas { display: block; background: #0a0f0a; outline: none; touch-action: none; }
+         scrolls in any window shorter than the canvas. Here the page is three
+         bands that never overlap: a header (title upper-left, diagnostics
+         upper-right), the canvas filling every pixel between them at whatever
+         aspect the window has (16:9 landscape or 9:16 portrait; the UI panel
+         scales on height in a landscape window, Systems_ScreenView), and a footer
+         carrying the build stamp lower-right. Title and version appear once,
+         outside the canvas; the game does not draw them in a browser. */
+      :root { --bg: #0a0f0a; --fg: #e8efe8; --muted: #9aa69a; --bar: 44px; --foot: 20px; }
+      html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; font-family: system-ui, sans-serif; color: var(--fg); }
+      body { display: flex; flex-direction: column; }
+      .po-bar { flex: 0 0 var(--bar); height: var(--bar); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; box-sizing: border-box; }
+      .po-brand { font-weight: 600; font-size: 14px; letter-spacing: 0.04em; color: var(--fg); text-decoration: none; }
+      .po-gear { width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid rgba(255,255,255,0.16); background: rgba(16,22,16,0.8); color: var(--fg); text-decoration: none; font-size: 16px; }
+      .po-foot { flex: 0 0 var(--foot); height: var(--foot); display: flex; align-items: center; justify-content: flex-end; padding: 0 10px; box-sizing: border-box; }
+      .po-version { font-size: 11px; color: var(--muted); }
+      #frame { position: relative; flex: 1 1 auto; min-height: 0; }
+      #unity-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; background: var(--bg); outline: none; touch-action: none; }
       #loading { position: absolute; inset: 0; display: flex; flex-direction: column;
                  align-items: center; justify-content: center; gap: 14px;
-                 font: 600 14px/1 system-ui, sans-serif; letter-spacing: 0.12em; color: #e8efe8; }
-      #bar { width: 60%; height: 6px; border-radius: 3px; background: #1c261c; overflow: hidden; }
+                 font: 600 14px/1 system-ui, sans-serif; letter-spacing: 0.12em; color: var(--fg); }
+      #bar { width: 60%; max-width: 420px; height: 6px; border-radius: 3px; background: #1c261c; overflow: hidden; }
       #fill { width: 0; height: 100%; background: #f5c542; }
       #error { position: absolute; left: 8%; right: 8%; bottom: 8%; display: none;
                padding: 12px; border-radius: 6px; background: #5a1a1a; color: #fff;
@@ -29,33 +36,22 @@
     </style>
   </head>
   <body>
-    <a class="po-brand" href="/">{{{ PRODUCT_NAME }}}</a>
-    <a class="po-gear" href="/diag" aria-label="Settings and diagnostics" title="Diagnostics (/diag)">⚙</a>
+    <header class="po-bar">
+      <a class="po-brand" href="/">{{{ PRODUCT_NAME }}}</a>
+      <a class="po-gear" href="/diag" aria-label="Diagnostics" title="Diagnostics (/diag)">⚙</a>
+    </header>
     <div id="frame">
       <canvas id="unity-canvas" tabindex="-1"></canvas>
-      <div id="loading"><div>{{{ PRODUCT_NAME }}}</div><div id="bar"><div id="fill"></div></div></div>
+      <div id="loading"><div>Loading…</div><div id="bar"><div id="fill"></div></div></div>
       <div id="error"></div>
     </div>
-    <span class="po-version">v{{{ PRODUCT_VERSION }}}</span>
+    <footer class="po-foot"><span class="po-version">v{{{ PRODUCT_VERSION }}}</span></footer>
     <script>
       var canvas = document.getElementById("unity-canvas");
       var loading = document.getElementById("loading");
       var fill = document.getElementById("fill");
       var errorBox = document.getElementById("error");
 
-      // Keep the build's canvas aspect (WebGLBuild sets it).
-      function fit() {
-        var height = window.innerHeight;
-        var width = Math.round(height * 9 / 16);
-        if (width > window.innerWidth) {
-          width = window.innerWidth;
-          height = Math.round(width * 16 / 9);
-        }
-        canvas.style.width = width + "px";
-        canvas.style.height = height + "px";
-      }
-      window.addEventListener("resize", fit);
-      fit();
 
       function showError(message) {
         errorBox.textContent = message;

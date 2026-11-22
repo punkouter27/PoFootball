@@ -1,6 +1,27 @@
 {
+  "title": "PoFootball",
   "buildMethod": "PoFootball.EditorTools.Editor_BuildWebGL.Build",
   "staticWebApp": "pofootball",
   "resourceGroup": "PoFootball",
-  "subscription": "14d963a2-badc-4a1f-9900-553bf01f8de2"
+  "subscription": "14d963a2-badc-4a1f-9900-553bf01f8de2",
+  "diagChecks": [
+    {
+      "section": "Site",
+      "name": "Game page (/)",
+      "url": "/",
+      "contains": "loader.js",
+      "expect": "ok"
+    },
+    {
+      "section": "Site",
+      "name": "Deployed commit (X-Commit header)",
+      "url": "/",
+      "expect": "commit"
+    },
+    {
+      "section": "Services",
+      "name": "3D renderer (WebGL2 in this browser)",
+      "expect": "webgl2"
+    }
+  ]
 }

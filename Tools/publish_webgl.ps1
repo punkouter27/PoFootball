@@ -4,7 +4,8 @@
 #
 # Owned by PoFootball.
 #
-#   pwsh -File Tools\publish_webgl.ps1               # build, zip, publish release, prune old ones
+#   pwsh -File Tools\publish_webgl.ps1               # build, zip, publish the release (older ones are kept)
+#   pwsh -File Tools\publish_webgl.ps1 -Keep 3       # ...and prune all but the newest 3 webgl-* releases
 #   pwsh -File Tools\publish_webgl.ps1 -SkipBuild    # publish the existing Builds/WebGL
 #   pwsh -File Tools\publish_webgl.ps1 -NoPublish    # build and zip only
 #
@@ -15,7 +16,7 @@
 param(
     [switch] $SkipBuild,
     [switch] $NoPublish,
-    [int] $Keep = 3          # webgl-* releases to keep, the new one included
+    [int] $Keep = 0          # webgl-* releases to keep, the new one included (0 = keep all; pruning deletes releases)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,16 +82,21 @@ if (-not (Test-Path (Join-Path $buildDir 'index.html'))) { throw "No WebGL build
 
 # Static Web Apps 404s .unityweb without this MIME config.
 Copy-Item (Join-Path $PSScriptRoot 'webgl\staticwebapp.config.json') $buildDir -Force
-$buildStamp = Get-Date -Format 'yyMMdd'
-$diagHtml = @"
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagnostics</title>
-<style>body{margin:0;background:#0a0f0a;color:#e8efe8;font:14px/1.5 system-ui,sans-serif}header{display:flex;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1c261c}header a{color:#e8efe8;text-decoration:none;font-weight:600}main{max-width:680px;margin:24px auto;padding:0 16px;display:grid;gap:12px}.card{background:#121a12;border:1px solid #1c261c;border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}.ok{color:#6fce8f;font-weight:600}.stamp{position:fixed;right:10px;bottom:6px;font-size:11px;color:#9aa69a}</style></head>
-<body><header><a href="/">WebGL Player</a><a href="/">← Back</a></header><main><h1>System status</h1>
-<div class="card"><span>WebGL build bundle (/index.html)</span><span class="ok">Ready</span></div>
-<div class="card"><span>3D renderer (WebGL2)</span><span id="gl" class="ok">Checking…</span></div>
-<div class="card"><span>Build version</span><span class="ok">v$buildStamp</span></div></main><span class="stamp">v$buildStamp</span>
-<script>document.getElementById('gl').textContent=document.createElement('canvas').getContext('webgl2')?'Healthy':'Unavailable';</script></body></html>
-"@
+# The build's own stamp (Editor_BuildStamp writes PlayerSettings.bundleVersion, the page shows it as vYYMMDD).
+$index = Get-Content (Join-Path $buildDir 'index.html') -Raw
+$buildStamp = if ($index -match 'v(\d{6})') { $Matches[1] } else { Get-Date -Format 'yyMMdd' }
+
+# /diag: the checks in webgl.json plus every file of this build, all probed live by the visitor's browser
+# (HEAD for the build files, so opening /diag does not download the game).
+$checks = [System.Collections.Generic.List[object]]::new()
+foreach ($c in $cfg.diagChecks) { $checks.Add($c) }
+foreach ($f in Get-ChildItem (Join-Path $buildDir 'Build') -File | Sort-Object Name) {
+    $checks.Add([ordered]@{ section = 'Game build'; name = "Build/$($f.Name)"; url = "/Build/$($f.Name)"; method = 'HEAD'; expect = 'ok' })
+}
+$diagHtml = (Get-Content (Join-Path $PSScriptRoot 'webgl\diag.html') -Raw).
+    Replace('__TITLE__', $cfg.title).
+    Replace('__VERSION__', $buildStamp).
+    Replace('__CHECKS__', ($checks | ConvertTo-Json -Depth 4 -Compress -AsArray))
 [IO.File]::WriteAllText((Join-Path $buildDir 'diag.html'), $diagHtml)
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $buildDir '*') -DestinationPath $zip -CompressionLevel Optimal
@@ -107,6 +113,7 @@ if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)." }
 "PUBLISHED $tag  ->  deploy: https://github.com/$repo/actions/workflows/webgl.yml"
 
 # Keep only the newest $Keep webgl-* releases (and their tags).
+if ($Keep -le 0) { return }
 $old = gh release list -R $repo --limit 100 --json tagName,createdAt |
     ConvertFrom-Json | Where-Object { $_.tagName -like 'webgl-*' } |
     Sort-Object createdAt -Descending | Select-Object -Skip $Keep

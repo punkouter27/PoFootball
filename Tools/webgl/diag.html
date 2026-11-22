@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- /diag of PoFootball's WebGL site. Tools/publish_webgl.ps1 fills __TITLE__, __VERSION__ and __CHECKS__ (the
+     checks in Tools/webgl.json plus every file of the build) and writes it as diag.html beside index.html. Every row
+     is probed live from this browser when the page opens; nothing here says "Ready" on its own. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0f0a">
+<link rel="icon" href="data:,">
+<title>System status · __TITLE__</title>
+<style>
+  :root { --bg:#0a0f0a; --surface:#121a12; --line:#1c261c; --text:#e8efe8; --muted:#9aa69a; --accent:#f5c542;
+          --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  header a { color: var(--text); text-decoration: none; font-weight: 600; }
+  header .back { color: var(--muted); font-weight: 500; }
+  main { max-width: 720px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 24px 0 8px; }
+  .banner { border-radius: 10px; padding: 12px 16px; font-weight: 600; background: var(--surface); border: 1px solid var(--line); }
+  .banner.ok { border-color: var(--ok); } .banner.warn { border-color: var(--warn); } .banner.bad { border-color: var(--bad); }
+  .row { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;
+         display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; }
+  .name { font-weight: 600; overflow-wrap: anywhere; }
+  .state { font-weight: 600; white-space: nowrap; }
+  .state.ok { color: var(--ok); } .state.warn { color: var(--warn); } .state.bad { color: var(--bad); } .state.wait { color: var(--muted); } .state.off { color: var(--muted); }
+  .detail { grid-column: 1 / -1; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  footer { position: fixed; right: 12px; bottom: 6px; font-size: 11px; color: var(--muted); }
+  /* On a phone the stamp comes after the content, never over a row. */
+  @media (max-width: 600px) { footer { position: static; text-align: right; padding: 0 16px 12px; } main { padding-bottom: 12px; } }
+</style>
+</head>
+<body>
+<header><a href="/">__TITLE__</a><a class="back" href="/">← Back to the game</a></header>
+<main>
+  <h1>System status</h1>
+  <div id="banner" class="banner">Checking…</div>
+  <div id="sections"></div>
+</main>
+<footer>v__VERSION__</footer>
+<script>
+"use strict";
+const CHECKS = __CHECKS__;
+const SECTIONS = ["Site", "Game build", "Services"];
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+function row(check) {
+  const r = el("div", "row"), state = el("span", "state wait", "Checking…"), detail = el("div", "detail", check.note || check.url || "");
+  r.append(el("span", "name", check.name), state, detail);
+  return { r, set(kind, text, more) { state.className = "state " + kind; state.textContent = text; if (more) detail.textContent = more + (check.note ? " · " + check.note : ""); } };
+}
+
+async function probe(check) {
+  // Switched off on purpose (nothing hosted to probe): a neutral "Off", never counted against the banner.
+  if (check.expect === "off") return { kind: "off", text: "Off", more: "off on purpose" };
+  if (check.expect === "commit") {
+    try {
+      const res = await fetch(check.url, { method: "HEAD", cache: "no-store" });
+      const sha = res.headers.get("x-commit");
+      return sha ? { kind: "ok", text: "Healthy", more: `X-Commit ${sha.slice(0, 7)} · ${check.url}` } : { kind: "bad", text: "Missing", more: `no X-Commit header on ${check.url}` };
+    } catch (e) { return { kind: "bad", text: "Unreachable", more: String(e.message || e) }; }
+  }
+  if (check.expect === "webgl2") {
+    const ok = !!document.createElement("canvas").getContext("webgl2");
+    return ok ? { kind: "ok", text: "Healthy", more: "WebGL2 context created" } : { kind: "bad", text: "Unavailable", more: "this browser gives no WebGL2 context" };
+  }
+  const t0 = performance.now();
+  try {
+    const res = await fetch(check.url, { method: check.method || "GET", cache: "no-store" });
+    const ms = Math.round(performance.now() - t0);
+    const size = res.headers.get("content-length");
+    const more = `${res.status} in ${ms} ms${size ? ` · ${(size / 1048576).toFixed(1)} MB` : ""} · ${check.url}`;
+    if (check.contains && res.ok) {
+      const body = await res.text();
+      if (!body.includes(check.contains)) return { kind: "bad", text: "Wrong content", more: `${more} · no "${check.contains}"` };
+    }
+    if (check.expect === "reachable") return res.status < 500 ? { kind: "ok", text: "Reachable", more } : { kind: "bad", text: "Down", more };
+    return res.ok ? { kind: "ok", text: "Healthy", more } : { kind: "bad", text: "Failing", more };
+  } catch (e) {
+    return { kind: "bad", text: "Unreachable", more: `${String(e.message || e)} after ${Math.round(performance.now() - t0)} ms · ${check.url}` };
+  }
+}
+
+(async () => {
+  const host = document.getElementById("sections"), rows = [];
+  for (const s of SECTIONS) {
+    const mine = CHECKS.filter(c => (c.section || "Services") === s);
+    if (!mine.length) continue;
+    host.append(el("h2", null, s));
+    for (const c of mine) { const r = row(c); host.append(r.r); rows.push([c, r]); }
+  }
+  const results = await Promise.all(rows.map(async ([c, r]) => { const o = await probe(c); r.set(o.kind, o.text, o.more); return o.kind; }));
+  const bad = results.filter(k => k === "bad").length, off = results.filter(k => k === "off").length;
+  const live = results.length - off;
+  const b = document.getElementById("banner");
+  b.className = "banner " + (bad ? "bad" : "ok");
+  b.textContent = bad ? `${bad} of ${live} live checks failing` : `All systems operational (${live} live checks${off ? `, ${off} off on purpose` : ""})`;
+})();
+</script>
+</body>
+</html>
