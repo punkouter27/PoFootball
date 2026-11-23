@@ -35,7 +35,7 @@
   every build file live from the visitor's browser. Text contrast >= 4.5:1.
 - **In-game diagnostics & demo:** `TAB` or the bottom-left chip (DEBUG in a development build, STATS in a release
   build) opens the RL readout: FPS, the last play's mean episode reward, the agent step per tick (which contains
-  inference), the curriculum stage, the control penalties charged, and **BENCHMARK TRAINING SPEED** (3 s of this
+  inference), the curriculum stage, the control penalties charged, and **BENCHMARK SIM SPEED** (3 s of this
   game's simulation as fast as the device can run it; local sim speed, not a training run). After 30 s with no
   input the attract mode starts (`Systems_AttractModeView`): a CPU game from the menu, camera cycling
   broadcast -> follow -> orbit, ended by any key, click or tap.

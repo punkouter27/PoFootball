@@ -7,7 +7,7 @@ using VContainer;
 namespace PoFootball.Views
 {
     /// <summary>
-    /// The TAB overlay's "benchmark training speed" button: runs this game's own
+    /// The TAB overlay's "benchmark sim speed" button: runs this game's own
     /// simulation — all 22 players observing, deciding and moving, the referee,
     /// Physics2D — as fast as this device can for a few real seconds, and counts
     /// the physics ticks it got through.

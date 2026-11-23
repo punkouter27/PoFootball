@@ -628,7 +628,7 @@ namespace PoFootball.Views
             _rlText.style.whiteSpace = WhiteSpace.Normal;
             block.Add(_rlText);
 
-            _benchmarkButton = BuildChip("BENCHMARK TRAINING SPEED", OnBenchmarkPressed);
+            _benchmarkButton = BuildChip("BENCHMARK SIM SPEED", OnBenchmarkPressed);
             _benchmarkButton.name = "BenchmarkButton";
             _benchmarkButton.style.marginTop = Systems_UiTheme.SPACE_S;
             block.Add(_benchmarkButton);

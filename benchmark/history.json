@@ -1,0 +1,111 @@
+{
+ "schema": 1,
+ "runs": [
+  {
+   "when": "2026-11-22T19:35:11-05:00",
+   "ok": true,
+   "error": null,
+   "machine": {
+    "hostname": "legion",
+    "cpu": "Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz (12 threads)",
+    "gpu": "NVIDIA GeForce RTX 2060",
+    "vram_gb": 6.0,
+    "ram_gb": 15.9,
+    "gpu_driver": "621.24",
+    "os": "Windows 11 (10.0.26300)"
+   },
+   "load_before": {
+    "cpu_pct": 15,
+    "ram_used_gb": 11.0,
+    "gpu_pct": 0.0,
+    "vram_used_gb": 0.0,
+    "gpu_temp_c": 44.0,
+    "sm_clock_mhz": 300.0,
+    "on_battery": false,
+    "gpu_processes": [
+     "EOSOverlayRenderer-Win64-Shipping.exe",
+     "EpicGamesLauncher.exe"
+    ]
+   },
+   "load_during": {
+    "cpu_pct": 39.2,
+    "ram_used_gb": 12.9,
+    "gpu_pct": 0.0,
+    "vram_used_gb": 0.0,
+    "gpu_temp_c": 53.3,
+    "sm_clock_mhz": 300.0,
+    "on_battery": false,
+    "samples": 26
+   },
+   "busy": false,
+   "workload_id": "4953c2",
+   "workload": {
+    "repo": "PoFootball",
+    "trainer": "mlagents 1.1.0 (torch 2.5.1+cu121, CPU)",
+    "config": "Training/FootballBase33.yaml (init_path dropped)",
+    "config_hash": "2474f0",
+    "num_envs": 4,
+    "behaviors": {
+     "Offense": {
+      "trainer": "poca",
+      "batch": 1024,
+      "buffer": 20480,
+      "net": [
+       256,
+       256
+      ],
+      "time_horizon": 124
+     },
+     "Defense": {
+      "trainer": "poca",
+      "batch": 1024,
+      "buffer": 20480,
+      "net": [
+       256,
+       256
+      ],
+      "time_horizon": 124
+     },
+     "Quarterback": {
+      "trainer": "ppo",
+      "batch": 256,
+      "buffer": 2048,
+      "net": [
+       256,
+       256
+      ],
+      "time_horizon": 124
+     },
+     "DefenseCall": {
+      "trainer": "ppo",
+      "batch": 64,
+      "buffer": 640,
+      "net": [
+       64,
+       64
+      ],
+      "time_horizon": 8
+     }
+    },
+    "unity": "6000.6.9f1",
+    "player_built": "2026-11-17T14:57:24"
+   },
+   "result": {
+    "step_time_ms": 546.224,
+    "sim_ms": 24.11,
+    "learn_ms": 522.115,
+    "env_steps_per_s": 7,
+    "steps_measured": 62.5,
+    "measured_s": 34.14,
+    "startup_s": 80.8
+   },
+   "git_commit": "fb0caa9",
+   "versions": {
+    "python": "3.10.11",
+    "torch": "2.5.1+cu121",
+    "mlagents": "1.1.0"
+   },
+   "workload_changes": []
+  }
+ ]
+}
