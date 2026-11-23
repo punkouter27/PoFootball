@@ -58,9 +58,11 @@
   No motion-capture data exists in this repo, so there is no BC/AMP pre-training stage (PPO/POCA only).
 - **Single workflow:** `.github/workflows/webgl.yml` runs the Python checks on every push and deploys `webgl-*`
   releases to the Azure Static Web App, then checks the live X-Commit and `/diag`.
-- **Known issue (open):** in the WebGL player every decision of a promoted brain throws
-  `MethodAccessException: ... Unity.InferenceEngine.ITensorData.get_backendType` (seen on the live v261119 build
-  and on v261122; a `link.xml` preserving the inference assemblies did not fix it). The game still plays.
+- **Known issue (open):** the WebGL player logs `MethodAccessException: ... Unity.InferenceEngine.
+  ITensorData.get_backendType on type ''` again and again once brains run. The policy does run: the local
+  v261123 build logs `Offense/Defense/Quarterback ... inference running` first, at 16:9 and 9:16. Likely cause:
+  ML-Agents' `TensorProxy` finalizer reads `data.dataOnBackend.backendType` of an already disposed tensor; a WebGL
+  build without null checks reports the null object as type `''`. It lives in the ML-Agents package, not here.
 - **Repo-specific exception:** PoFootball is a 2D `Rigidbody2D` ML-Agents game: no articulated skeleton, joints,
   PD actuators or head to gaze-track. Phone builds are portrait-locked; only the browser build adapts to landscape.
 
