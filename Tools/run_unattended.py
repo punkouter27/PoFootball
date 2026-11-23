@@ -256,6 +256,30 @@ class Run:
         self.log(f"training report: {(code.stdout or code.stderr).strip()}")
 
 
+def record_run(run: Run) -> None:
+    """benchmark/runs.py: note this machine and how the run ended, and rebuild results/runs.html. Never fatal."""
+    try:
+        out = subprocess.run(
+            [
+                str(PYTHON),
+                str(REPO_ROOT / "benchmark" / "runs.py"),
+                "--record",
+                run.args.run,
+                "--ended",
+                run.ended_by or "unknown",
+                "--launcher",
+                "Tools/run_unattended.py",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        run.log((out.stdout or out.stderr).strip() or f"runs grid exited {out.returncode}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        run.log(f"runs grid not rebuilt: {exc}")
+
+
 def kill_envs(run: Run) -> None:
     """Envs the trainer left behind hold their ports, and the next handshake hangs."""
     result = subprocess.run(["taskkill", "/IM", "PoFootball.exe", "/F"], capture_output=True, text=True)
@@ -326,10 +350,14 @@ def main() -> int:
     run = Run(args)
     try:
         run.train()
+    except BaseException as exc:
+        run.ended_by = run.ended_by or f"launcher crashed: {type(exc).__name__}: {exc}"[:200]
+        raise
     finally:
         if run.trainer and run.trainer.poll() is None:
             run.stop_trainer_cleanly()
         kill_envs(run)
+        record_run(run)
     run.judge_and_report()
     run.log("done")
     return 0
