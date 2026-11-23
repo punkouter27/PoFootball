@@ -163,18 +163,18 @@ namespace PoFootball.Tests
         /// tree for it. It is asserted where it is drawn now, alongside the other
         /// corners CLAUDE.md section 3 names.
         ///
-        /// Not in batch mode: Systems_StatusHudBootstrap deliberately spawns no
-        /// HUD there, because there is no display to draw it on.
+        /// In batch mode Systems_StatusHudBootstrap deliberately spawns no HUD (no
+        /// display), so the test spawns the player's HUD itself (SpawnInto).
         /// </summary>
         [UnityTest]
         public IEnumerator StatusHud_CarriesTheCornersOnTheMenu()
         {
-            if (Application.isBatchMode)
-            {
-                Assert.Ignore("No status HUD is spawned in batch mode, by design.");
-            }
-
             yield return LoadAndSettle("SCN_MENU");
+
+            // Batch mode spawns no HUD by design; spawn the player's HUD here instead.
+            Views.Systems_StatusHudBootstrap.SpawnInto(SceneManager.GetActiveScene());
+            yield return null;
+            yield return null;
 
             System.Collections.Generic.List<VisualElement> all = Descendants(
                 FindDocumentFor<Views.Systems_StatusHudView>().rootVisualElement);

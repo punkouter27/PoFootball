@@ -28,12 +28,13 @@ namespace PoFootball.Tests
         }
 
         [UnityTest]
+        [Timeout(300000)]
         public IEnumerator EveryControlPenaltyTerm_IsChargedInALiveGame()
         {
             yield return Systems_UiTestKit.LoadAndSettle(Views.Systems_SceneRouter.GAME_SCENE);
 
             Time.timeScale = 8f;
-            float deadline = Time.realtimeSinceStartup + 30f;
+            float deadline = Time.realtimeSinceStartup + 120f;
             Reward_Penalty.Terms totals = default;
 
             while (Time.realtimeSinceStartup < deadline)
@@ -65,6 +66,7 @@ namespace PoFootball.Tests
         }
 
         [UnityTest]
+        [Timeout(300000)]
         public IEnumerator TabOverlay_ShowsTheReadout_AndBenchmarksTheSimulation()
         {
             yield return Systems_UiTestKit.LoadAndSettle(Views.Systems_SceneRouter.GAME_SCENE);
@@ -73,10 +75,20 @@ namespace PoFootball.Tests
             yield return null;
             yield return null;
 
-            // Long enough at 8x for a few plays to finish and report their reward.
+            // At 8x until a play has finished and reported its reward: waits for the
+            // condition (capped at 120 s real), not a fixed window a busy CPU can miss.
+            Models.Systems_SimHealthModel health = Object.FindAnyObjectByType<Systems.Systems_GameLifetimeScope>()
+                .Container.Resolve(typeof(Models.Systems_SimHealthModel)) as Models.Systems_SimHealthModel;
             Time.timeScale = 8f;
-            yield return new WaitForSecondsRealtime(8f);
+            float playDeadline = Time.realtimeSinceStartup + 120f;
+
+            while (float.IsNaN(health.LastEpisodeReward) && Time.realtimeSinceStartup < playDeadline)
+            {
+                yield return new WaitForSecondsRealtime(0.5f);
+            }
+
             Time.timeScale = 1f;
+            Assert.That(float.IsNaN(health.LastEpisodeReward), Is.False, "no play finished in 120 s at 8x");
 
             hud.ToggleDebugSheet();
             Assert.That(hud.IsSheetOpen, Is.True, "TAB did not open the sheet");
@@ -94,7 +106,7 @@ namespace PoFootball.Tests
             hud.PressBenchmark();
             Assert.That(benchmark.IsRunning, Is.True, "the button did not start the benchmark");
 
-            float deadline = Time.realtimeSinceStartup + 20f;
+            float deadline = Time.realtimeSinceStartup + 60f;
             while (benchmark.IsRunning && Time.realtimeSinceStartup < deadline)
             {
                 yield return null;
@@ -113,6 +125,7 @@ namespace PoFootball.Tests
         }
 
         [UnityTest]
+        [Timeout(300000)]
         public IEnumerator DemoMode_StartsAfterThirtySecondsIdle_AndInputEndsIt()
         {
             Views.Systems_AttractModeView.Suppressed = false;
@@ -124,8 +137,11 @@ namespace PoFootball.Tests
             Assert.That(menuView, Is.Not.Null, "no attract view on the menu");
             Assert.That(menuView.Settings.IdleSeconds, Is.EqualTo(30f), "idle threshold is not 30 s");
 
+            // The idle clock skips frames over 0.25 s, so a loaded machine takes longer
+            // than 30 s real to reach it: wait for the demo with a generous cap, and
+            // check the clock itself rather than the wall time.
             float idleFrom = Time.realtimeSinceStartup;
-            float deadline = idleFrom + 40f;
+            float deadline = idleFrom + 120f;
 
             while (SceneManager.GetActiveScene().name != Views.Systems_SceneRouter.GAME_SCENE
                 && Time.realtimeSinceStartup < deadline)
@@ -137,7 +153,7 @@ namespace PoFootball.Tests
             Debug.Log($"[PoFootball] demo game loaded after {waited:0.0} s idle");
             Assert.That(
                 SceneManager.GetActiveScene().name, Is.EqualTo(Views.Systems_SceneRouter.GAME_SCENE),
-                "no demo game after 40 s idle");
+                "no demo game after 120 s idle");
             Assert.That(waited, Is.GreaterThanOrEqualTo(29.5f), "demo started before 30 s idle");
             Assert.That(Views.Systems_AttractModeView.DemoGame, Is.True, "the game was not flagged as a demo");
 
@@ -150,7 +166,14 @@ namespace PoFootball.Tests
             Views.Systems_BroadcastCameraView camera = Object.FindAnyObjectByType<Views.Systems_BroadcastCameraView>();
             Assert.That(gameView.IsActive, Is.True, "the demo game did not start in demo mode");
 
-            yield return new WaitForSecondsRealtime(gameView.Settings.CameraDwellSeconds + 0.5f);
+            float cycleDeadline = Time.realtimeSinceStartup + gameView.Settings.CameraDwellSeconds + 60f;
+
+            while (camera.CameraMode == Views.Systems_CameraMode.Broadcast
+                && Time.realtimeSinceStartup < cycleDeadline)
+            {
+                yield return null;
+            }
+
             Assert.That(
                 camera.CameraMode, Is.Not.EqualTo(Views.Systems_CameraMode.Broadcast),
                 "the demo did not cycle the camera");

@@ -56,6 +56,50 @@ namespace PoFootball.Rewards
             }
 
             public float Total => Effort + AngularVelocity + ActionJitter + Slide;
+
+            /// <summary>Term-by-term sum, for a running total.</summary>
+            public Terms Plus(in Terms other)
+            {
+                return new Terms(
+                    Effort + other.Effort,
+                    AngularVelocity + other.AngularVelocity,
+                    ActionJitter + other.ActionJitter,
+                    Slide + other.Slide);
+            }
+        }
+
+        /// <summary>
+        /// The TensorBoard keys one brain's penalties are logged under: the total
+        /// and each term on its own. Built once per agent, so a play's flush
+        /// allocates nothing.
+        /// </summary>
+        public readonly struct LedgerKeys
+        {
+            public readonly string Total;
+            public readonly string Effort;
+            public readonly string AngularVelocity;
+            public readonly string ActionJitter;
+            public readonly string Slide;
+
+            /// <param name="prefix">The brain's ledger prefix, e.g. "Reward/Offense/".</param>
+            public LedgerKeys(string prefix)
+            {
+                Total = prefix + "Penalty";
+                Effort = prefix + "Penalty/Effort";
+                AngularVelocity = prefix + "Penalty/AngularVelocity";
+                ActionJitter = prefix + "Penalty/ActionJitter";
+                Slide = prefix + "Penalty/Slide";
+            }
+        }
+
+        /// <summary>Writes one play's penalty sums, the total and every term, to a stats sink.</summary>
+        public static void Log(in LedgerKeys keys, in Terms play, System.Action<string, float> sink)
+        {
+            sink(keys.Total, play.Total);
+            sink(keys.Effort, play.Effort);
+            sink(keys.AngularVelocity, play.AngularVelocity);
+            sink(keys.ActionJitter, play.ActionJitter);
+            sink(keys.Slide, play.Slide);
         }
 
         /// <summary>

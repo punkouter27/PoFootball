@@ -135,13 +135,29 @@ namespace PoFootball.Views
 
             Result = string.Format(
                 CultureInfo.InvariantCulture,
-                "Benchmark ({0:0.0} s, this device, 1 game, CPU): {1:N0} physics ticks/s = {2:N0} agent decisions/s "
-                    + "({3} players). Local simulation speed, not a training run.",
+                "Benchmark ({0:0.0} s, this device: {4}; 1 game, CPU): {1:N0} physics ticks/s = {2:N0} agent "
+                    + "decisions/s ({3} players). Local simulation speed, not a training run.",
                 _realElapsed,
                 TicksPerSecond,
                 decisions,
-                players);
+                players,
+                Hardware());
             Systems_Log.Info("[PoFootball] " + Result);
+        }
+
+        /// <summary>What ran it: CPU, logical cores and graphics device, as the platform reports them.</summary>
+        private static string Hardware()
+        {
+            string cpu = string.IsNullOrWhiteSpace(SystemInfo.processorType)
+                ? "CPU not reported"
+                : SystemInfo.processorType.Trim();
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} x{1}, {2}",
+                cpu,
+                SystemInfo.processorCount,
+                SystemInfo.graphicsDeviceName);
         }
     }
 }

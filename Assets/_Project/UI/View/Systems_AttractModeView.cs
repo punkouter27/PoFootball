@@ -39,6 +39,21 @@ namespace PoFootball.Views
         /// </summary>
         internal static bool Suppressed { get; set; }
 
+        /// <summary>
+        /// A frame longer than this is not idle time: a scene load, a stall, a
+        /// background tab the browser throttled. Counting it would start the demo
+        /// on a viewer who only looked away for a moment.
+        /// </summary>
+        internal const float MAX_COUNTED_FRAME_SECONDS = 0.25f;
+
+        /// <summary>The idle (or camera dwell) clock after one frame: a long frame adds nothing.</summary>
+        internal static float Advance(float clockSeconds, float frameSeconds)
+        {
+            return frameSeconds > MAX_COUNTED_FRAME_SECONDS || frameSeconds < 0f
+                ? clockSeconds
+                : clockSeconds + frameSeconds;
+        }
+
         private Systems_ShowcaseSettings _settings;
         private Systems_StatusHudView _statusHud;
         private Systems_BroadcastCameraView _camera;
@@ -96,7 +111,7 @@ namespace PoFootball.Views
 
             if (!_active)
             {
-                _idleSeconds = Suppressed ? 0f : _idleSeconds + delta;
+                _idleSeconds = Suppressed ? 0f : Advance(_idleSeconds, delta);
 
                 if (_idleSeconds >= _settings.IdleSeconds)
                 {
@@ -115,7 +130,7 @@ namespace PoFootball.Views
                 return;
             }
 
-            _dwell += delta;
+            _dwell = Advance(_dwell, delta);
 
             if (_dwell >= _settings.CameraDwellSeconds)
             {

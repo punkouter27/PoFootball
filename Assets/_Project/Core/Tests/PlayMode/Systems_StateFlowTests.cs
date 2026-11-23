@@ -189,12 +189,12 @@ namespace PoFootball.Tests
         [UnityTest]
         public IEnumerator Back_InALiveGame_ArmsThenLeaves()
         {
-            if (Application.isBatchMode)
-            {
-                Assert.Ignore("No status HUD in batch mode.");
-            }
-
             yield return Systems_UiTestKit.LoadAndSettle(Views.Systems_SceneRouter.GAME_SCENE);
+
+            // Batch mode spawns no HUD by design; spawn the player's HUD here instead.
+            Views.Systems_StatusHudBootstrap.SpawnInto(SceneManager.GetActiveScene());
+            yield return null;
+            yield return null;
 
             Views.Systems_StatusHudView hud = Systems_UiTestKit.StatusHud();
             hud.RouteBack();
@@ -218,12 +218,12 @@ namespace PoFootball.Tests
         [UnityTest]
         public IEnumerator Back_OnTheMenu_ClosesSheetsThenArmsExit()
         {
-            if (Application.isBatchMode)
-            {
-                Assert.Ignore("No status HUD in batch mode.");
-            }
-
             yield return Systems_UiTestKit.LoadAndSettle(Views.Systems_SceneRouter.MENU_SCENE);
+
+            // Batch mode spawns no HUD by design; spawn the player's HUD here instead.
+            Views.Systems_StatusHudBootstrap.SpawnInto(SceneManager.GetActiveScene());
+            yield return null;
+            yield return null;
 
             VisualElement menuRoot = Systems_UiTestKit.RootOf<Views.Systems_MenuView>();
             Systems_UiTestKit.Press(Systems_UiTestKit.FindButton(menuRoot, "SETTINGS"));

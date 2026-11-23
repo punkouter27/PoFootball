@@ -146,7 +146,10 @@ namespace PoFootball.Agents
         private string _ledgerCallKey;
         private string _ledgerTerminalKey;
         private string _ledgerShapingShareKey;
-        private string _ledgerPenaltyKey;
+        private Reward_Penalty.LedgerKeys _ledgerPenaltyKeys;
+        private Reward_Penalty.Terms _penaltyPlay;
+        private System.Action<string, float> _statSink;
+        private bool _inferenceChecked;
 
         // The control penalties (Reward_Penalty): weights from the
         // PoFootballRewardPenalties asset, a per-play sum for the ledger, and
@@ -550,7 +553,8 @@ namespace PoFootball.Agents
             _ledgerCallKey = ledgerPrefix + "Call";
             _ledgerTerminalKey = ledgerPrefix + "Terminal";
             _ledgerShapingShareKey = ledgerPrefix + "ShapingShare";
-            _ledgerPenaltyKey = ledgerPrefix + "Penalty";
+            _ledgerPenaltyKeys = new Reward_Penalty.LedgerKeys(ledgerPrefix);
+            _statSink = (key, value) => Academy.Instance.StatsRecorder.Add(key, value);
 
             Reward_PenaltyWeights penaltyAsset =
                 Resources.Load<Reward_PenaltyWeights>(Reward_PenaltyWeights.RESOURCE_PATH);
@@ -897,6 +901,12 @@ namespace PoFootball.Agents
 
         public override void OnActionReceived(ActionBuffers actions)
         {
+            if (!_inferenceChecked)
+            {
+                _inferenceChecked = true;
+                Agent_InferenceLog.OnFirstAction(GetComponent<BehaviorParameters>());
+            }
+
             if (_play == null)
             {
                 return;
@@ -1401,6 +1411,7 @@ namespace PoFootball.Agents
             float total = terms.Total;
             AddReward(total);
             _penaltyRewardSum += total;
+            _penaltyPlay = _penaltyPlay.Plus(in terms);
             _penaltyEffortTotal += terms.Effort;
             _penaltySpinTotal += terms.AngularVelocity;
             _penaltyJitterTotal += terms.ActionJitter;
@@ -1893,7 +1904,7 @@ namespace PoFootball.Agents
                 stats.Add(_ledgerRoleKey, _roleRewardSum);
                 stats.Add(_ledgerCallKey, _callRewardSum);
                 stats.Add(_ledgerTerminalKey, _terminalRewardSum);
-                stats.Add(_ledgerPenaltyKey, _penaltyRewardSum);
+                Reward_Penalty.Log(in _ledgerPenaltyKeys, in _penaltyPlay, _statSink);
 
                 float paid = Mathf.Abs(_progressRewardSum) + Mathf.Abs(_roleRewardSum)
                     + Mathf.Abs(_callRewardSum) + Mathf.Abs(_terminalRewardSum);
@@ -1909,6 +1920,7 @@ namespace PoFootball.Agents
             _callRewardSum = 0f;
             _terminalRewardSum = 0f;
             _penaltyRewardSum = 0f;
+            _penaltyPlay = default;
         }
 
         /// <summary>

@@ -49,6 +49,7 @@ namespace PoFootball.Agents
         /// <summary>Built on the first call a trained brain makes with someone watching.</summary>
         private Agent_PolicySampler _sampler;
         private bool _samplerTried;
+        private bool _inferenceChecked;
 
         private string[] _statKeys;
 
@@ -176,6 +177,12 @@ namespace PoFootball.Agents
 
         public override void OnActionReceived(ActionBuffers actions)
         {
+            if (!_inferenceChecked)
+            {
+                _inferenceChecked = true;
+                Agent_InferenceLog.OnFirstAction(_behaviorParameters);
+            }
+
             int branchIndex = actions.DiscreteActions[0];
 
             if (_play == null

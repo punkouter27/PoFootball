@@ -1,7 +1,9 @@
 <!doctype html>
 <!-- /diag of PoFootball's WebGL site. Tools/publish_webgl.ps1 fills __TITLE__, __VERSION__ and __CHECKS__ (the
      checks in Tools/webgl.json plus every file of the build) and writes it as diag.html beside index.html. Every row
-     is probed live from this browser when the page opens; nothing here says "Ready" on its own. -->
+     is probed live from this browser when the page opens; nothing here says "Ready" on its own. One probe round is
+     remembered for MAX_AGE_S seconds in this tab (sessionStorage), so reopening /diag does not HEAD every build file
+     again; /diag?fresh (or the "Re-check now" link) probes at once. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -45,6 +47,18 @@
 "use strict";
 const CHECKS = __CHECKS__;
 const SECTIONS = ["Site", "Game build", "Services"];
+const STORE_KEY = "pofootball-diag", MAX_AGE_S = 60;
+
+// The last probe round of this tab when it is younger than MAX_AGE_S and covers the same checks; null otherwise.
+function remembered() {
+  if (new URLSearchParams(location.search).has("fresh")) return null;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(STORE_KEY) || "null");
+    if (!saved || saved.count !== CHECKS.length) return null;
+    const ageS = (Date.now() - saved.when) / 1000;
+    return ageS >= 0 && ageS < MAX_AGE_S ? { ageS, outcomes: saved.outcomes } : null;
+  } catch (e) { return null; }
+}
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
@@ -93,12 +107,19 @@ async function probe(check) {
     host.append(el("h2", null, s));
     for (const c of mine) { const r = row(c); host.append(r.r); rows.push([c, r]); }
   }
-  const results = await Promise.all(rows.map(async ([c, r]) => { const o = await probe(c); r.set(o.kind, o.text, o.more); return o.kind; }));
+  const memo = remembered();
+  const outcomes = memo ? memo.outcomes : await Promise.all(rows.map(([c]) => probe(c)));
+  rows.forEach(([, r], i) => r.set(outcomes[i].kind, outcomes[i].text, outcomes[i].more));
+  if (!memo) { try { sessionStorage.setItem(STORE_KEY, JSON.stringify({ when: Date.now(), count: CHECKS.length, outcomes })); } catch (e) { /* storage blocked: every visit probes */ } }
+  const results = outcomes.map(o => o.kind);
   const bad = results.filter(k => k === "bad").length, off = results.filter(k => k === "off").length;
   const live = results.length - off;
   const b = document.getElementById("banner");
   b.className = "banner " + (bad ? "bad" : "ok");
   b.textContent = bad ? `${bad} of ${live} live checks failing` : `All systems operational (${live} live checks${off ? `, ${off} off on purpose` : ""})`;
+  const when = el("div", "detail", memo ? `Probed ${Math.round(memo.ageS)} s ago, kept ${MAX_AGE_S} s in this tab. ` : `Probed just now, kept ${MAX_AGE_S} s in this tab. `);
+  const again = el("a", null, "Re-check now"); again.href = "?fresh"; again.style.color = "var(--accent)";
+  when.append(again); b.append(when);
 })();
 </script>
 </body>
