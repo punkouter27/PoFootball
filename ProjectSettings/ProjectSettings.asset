@@ -149,7 +149,7 @@ PlayerSettings:
   loadStoreDebugModeEnabled: 0
   visionOSBundleVersion: 1.0
   tvOSBundleVersion: 1.0
-  bundleVersion: 261122
+  bundleVersion: 261126
   preloadedAssets:
   - {fileID: -944628639613478452, guid: 2bcd2660ca9b64942af0de543d8d7100, type: 3}
   metroInputSource: 0
@@ -731,7 +731,7 @@ PlayerSettings:
     Server: UNITY_MCP_READY;UNITY_MCP_DEPS_38
     Standalone: APP_UI_EDITOR_ONLY;UNITY_MCP_READY;UNITY_MCP_DEPS_38
     VisionOS: UNITY_MCP_READY;UNITY_MCP_DEPS_38
-    WebGL: APP_UI_EDITOR_ONLY;UNITY_MCP_READY;UNITY_MCP_DEPS_38
+    WebGL: APP_UI_EDITOR_ONLY;UNITY_MCP_READY;UNITY_MCP_DEPS_38;SENTIS_ANALYTICS_ENABLED
     Windows Store Apps: UNITY_MCP_READY;UNITY_MCP_DEPS_38
     XboxOne: UNITY_MCP_READY;UNITY_MCP_DEPS_38
     iPhone: UNITY_MCP_READY;UNITY_MCP_DEPS_38
