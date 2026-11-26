@@ -391,6 +391,68 @@
    },
    "verdict": [],
    "workload_changes": []
+  },
+  {
+   "when": "2026-11-26T13:18:36-05:00",
+   "ok": false,
+   "error": "RuntimeError: training env build failed: see Logs/benchmark_build.log",
+   "machine": {
+    "hostname": "WIN-C2ANEVBHN6Q",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX (24 threads)",
+    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "vram_gb": 11.9,
+    "ram_gb": 31.4,
+    "gpu_driver": "621.24",
+    "os": "Windows 11 (10.0.26300)"
+   },
+   "load_before": {
+    "cpu_pct": 19,
+    "cpu_max_core_pct": 100,
+    "trainer_cpu_cores": 0.0,
+    "trainer_thread_pct": 0,
+    "ram_used_gb": 19.8,
+    "gpu_pct": 37.0,
+    "gpu_mem_pct": 29.0,
+    "vram_used_gb": 0.5,
+    "gpu_temp_c": 46.91,
+    "sm_clock_mhz": 180.0,
+    "sm_clock_max_mhz": 3090.0,
+    "power_w": 10.13,
+    "power_limit_w": 15.0,
+    "pstate": "P8",
+    "clock_reasons": [
+     "power cap"
+    ],
+    "display_active": true,
+    "pcie": "gen 1 x8",
+    "on_battery": false,
+    "gpu_processes": [
+     "DCv2.exe",
+     "EOSOverlayRenderer-Win64-Shipping.exe",
+     "EpicGamesLauncher.exe",
+     "Unity Hub.exe",
+     "msedge.exe"
+    ]
+   },
+   "load_during": {},
+   "busy": true,
+   "workload_id": "190beb",
+   "workload": {
+    "repo": "PoFootball",
+    "config": "FootballBase33.yaml"
+   },
+   "result": null,
+   "git_commit": "b663880",
+   "versions": {
+    "python": "3.10.11"
+   },
+   "context": {
+    "power_plan": "Balanced",
+    "power_mode": "balanced",
+    "gpu_scheduling": null
+   },
+   "verdict": [],
+   "workload_changes": []
   }
  ]
 }
